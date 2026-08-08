@@ -1,43 +1,40 @@
-enum SymbolLocation {
+pub enum SymbolLocation {
   File { path: string },
-  PendingFile,
   External,
 }
 
-struct Symbol { location: SymbolLocation, name: string }
+pub struct Symbol {
+  pub location: SymbolLocation,
+  pub name: string,
+}
 
 impl Symbol {
-  fn local(file: string, name: string) -> Symbol {
+  pub fn local(file: string, name: string) -> Symbol {
     Symbol { location: SymbolLocation.File { path: file }, name }
   }
 
-  fn pending(name: string) -> Symbol {
-    Symbol { location: SymbolLocation.PendingFile, name }
-  }
-
-  fn external(name: string) -> Symbol {
+  pub fn external(name: string) -> Symbol {
     Symbol { location: SymbolLocation.External, name }
   }
 
-  fn to_key(self) -> string {
+  pub fn to_key(self) -> string {
     match self.location {
       SymbolLocation.File { path } => f"file:{path.length()}:{path}:{self.name}",
-      SymbolLocation.PendingFile => f"pending:{self.name}",
       SymbolLocation.External => f"external:{self.name}",
     }
   }
 
-  fn display_key(self) -> string {
+  pub fn display_key(self) -> string {
     match self.location {
       SymbolLocation.File { path } => f"{path}:{self.name}",
-      SymbolLocation.PendingFile | SymbolLocation.External => self.name,
+      SymbolLocation.External => self.name,
     }
   }
 
   fn file(self) -> Option<string> {
     match self.location {
       SymbolLocation.File { path } => Some(path),
-      SymbolLocation.PendingFile | SymbolLocation.External => None,
+      SymbolLocation.External => None,
     }
   }
 
@@ -45,14 +42,13 @@ impl Symbol {
     self.to_key() == other.to_key()
   }
 
+  #[allow(let_and_return)]
   fn display_callee(self, caller_file: string) -> string {
-    match self.location {
+    let result = match self.location {
       SymbolLocation.External => f"{self.name} (external)",
       SymbolLocation.File { path } if path == caller_file => self.name,
       SymbolLocation.File { path } => f"{self.name} ({path})",
-      SymbolLocation.PendingFile => {
-        panic("unresolved pending file")
-      },
     }
+    result
   }
 }

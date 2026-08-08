@@ -1,0 +1,45 @@
+import "go:os"
+import "go:path/filepath"
+import "go:strings"
+
+pub struct File {
+  pub path: string,
+  pub content: Slice<byte>,
+}
+
+pub fn files(root: string) -> Result<Slice<File>, error> {
+  collect(root, root)
+}
+
+fn collect(root: string, dir: string) -> Result<Slice<File>, error> {
+  let entries = match os.ReadDir(dir) {
+    Partial.Ok(entries) | Partial.Both(entries, _) => entries,
+    Partial.Err(err) => return Err(err),
+  }
+  let mut out: Slice<File> = Slice.new()
+  for entry in entries {
+    let name = entry.Name()
+    let path = filepath.Join(dir, name)
+    if entry.IsDir() {
+      if name == ".git" { continue }
+      for file in collect(root, path)? {
+        out = out.append(file)
+      }
+    } else if !name.starts_with(".") {
+      out = out.append(
+        File { path: relative_path(root, path), content: os.ReadFile(path)? },
+      )
+    }
+  }
+  Ok(out)
+}
+
+fn relative_path(root: string, path: string) -> string {
+  let root = strings.TrimPrefix(root, "./")
+  let path = strings.TrimPrefix(path, "./")
+  if path.starts_with(root) {
+    path.substring((root.length() + 1)..path.length())
+  } else {
+    path
+  }
+}

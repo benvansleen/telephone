@@ -1,0 +1,84 @@
+import "callgraph"
+import "source"
+import "treesitter"
+
+pub fn analyze_dir(root: string) -> Result<callgraph.Graph, error> {
+  let adapter = Go.new()
+  let mut extracted: Slice<treesitter.ExtractedFile> = Slice.new()
+  for file in source.files(root)? {
+    if adapter.supports(file.path) {
+      extracted = extracted.append(adapter.extract(file.path, file.content))
+    }
+  }
+  Ok(resolve(extracted))
+}
+
+fn resolve(files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
+  let mut functions: Map<string, callgraph.Symbol> = Map.new()
+  let mut methods: Map<string, Option<callgraph.Symbol>> = Map.new()
+  let mut declarations: Slice<callgraph.Symbol> = Slice.new()
+
+  for file in files {
+    for name in file.declarations {
+      let symbol = callgraph.Symbol.local(file.path, name)
+      declarations = declarations.append(symbol)
+      if name.contains(".") {
+        let method = field_name(name)
+        match methods.get(method) {
+          Some(_) => methods[method] = None,
+          None => methods[method] = Some(symbol),
+        }
+      } else {
+        functions[name] = symbol
+      }
+    }
+  }
+
+  let mut edges: Slice<callgraph.Edge> = Slice.new()
+  for file in files {
+    for call in file.calls {
+      let (callee, kind) = resolve_call(call, file.path, functions, methods)
+      edges = edges.append(
+        callgraph.Edge {
+          caller: callgraph.Symbol.local(file.path, call.caller),
+          callee,
+          kind,
+        },
+      )
+    }
+  }
+  callgraph.Graph { decls: declarations, edges }
+}
+
+fn resolve_call(
+  call: treesitter.ExtractedCall,
+  file: string,
+  functions: Map<string, callgraph.Symbol>,
+  methods: Map<string, Option<callgraph.Symbol>>,
+) -> (callgraph.Symbol, string) {
+  if call.kind == "local" {
+    return (
+      functions
+        .get(call.callee)
+        .unwrap_or_else(|| callgraph.Symbol.local(file, call.callee)),
+      "local",
+    )
+  }
+  if call.callee.contains(".") {
+    return match methods.get(field_name(call.callee)) {
+      Some(Some(symbol)) => (symbol, "method"),
+      _ => (callgraph.Symbol.external(call.callee), "external"),
+    }
+  }
+  functions
+    .get(call.callee)
+    .map_or_else(
+      || (callgraph.Symbol.external(call.callee), "external"),
+      |symbol| (symbol, "local"),
+    )
+}
+
+fn field_name(qualified: string) -> string {
+  let parts = qualified.split(".")
+  parts[parts.length() - 1]
+}

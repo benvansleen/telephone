@@ -3,7 +3,27 @@ import "go:path/filepath"
 import "go:slices"
 import "go:strings"
 
-fn render_graph(graph: Graph) -> string {
+import "callgraph"
+import "treesitter"
+
+fn analyze(source: Slice<byte>) -> callgraph.Graph {
+  resolve([Go.new().extract("test.go", source)])
+}
+
+fn analyze_dir_with(root: string, _: string, _: string) -> Result<callgraph.Graph, error> {
+  analyze_dir(root)
+}
+
+fn supports_go_files(adapter: treesitter.Adapter) -> bool {
+  adapter.supports("main.go")
+}
+
+#[test]
+fn implements_treesitter_adapter() {
+  assert supports_go_files(Go.new())
+}
+
+fn render_graph(graph: callgraph.Graph) -> string {
   let mut lines: Slice<string> = Slice.new()
   for d in graph.decls {
     lines = lines.append(f"def {d.display_key()}")
@@ -17,7 +37,7 @@ fn render_graph(graph: Graph) -> string {
   strings.Join(lines, "\n")
 }
 
-fn diff_edges(a: Graph, b: Graph) -> string {
+fn diff_edges(a: callgraph.Graph, b: callgraph.Graph) -> string {
   let mut out: Slice<string> = Slice.new()
   let a_lines = render_graph(a).split("\n")
   let b_lines = render_graph(b).split("\n")
@@ -43,7 +63,7 @@ func Bar() {}
 "
   let dq = "(function_declaration name: (identifier) @fn.name)"
   let cq = "(call_expression function: (_) @callee)"
-  let graph = Graph.analyze(source.bytes(), dq, cq)
+  let graph = analyze(source.bytes())
   assert has_decl(graph.decls, "Foo")
   assert has_decl(graph.decls, "Bar")
   assert graph.edges.length() == 1
@@ -63,38 +83,49 @@ func Foo() {
 "
   let dq = "(function_declaration name: (identifier) @fn.name)"
   let cq = "(call_expression function: (_) @callee)"
-  let graph = Graph.analyze(source.bytes(), dq, cq)
+  let graph = analyze(source.bytes())
   assert graph.edges.length() == 1
   assert graph.edges[0].caller.name == "Foo"
   assert graph.edges[0].callee.name == "fmt.Println"
   assert graph.edges[0].kind == "external"
 }
 
-fn has_decl(decls: Slice<Symbol>, name: string) -> bool {
+fn has_decl(decls: Slice<callgraph.Symbol>, name: string) -> bool {
   for decl in decls {
     if decl.name == name { return true }
   }
   false
 }
 
-fn has_edge(edges: Slice<Edge>, caller: string, callee: string, kind: string) -> bool {
+fn has_edge(
+  edges: Slice<callgraph.Edge>,
+  caller: string,
+  callee: string,
+  kind: string,
+) -> bool {
   for e in edges {
-    if e.caller.display_key() == caller && e.callee.display_key() == callee && e.kind == kind {
-      return true
+    let caller_matches = if caller.contains(":") {
+      e.caller.display_key() == caller
+    } else {
+      e.caller.name == caller
     }
+    let callee_matches = if callee.contains(":") {
+      e.callee.display_key() == callee
+    } else {
+      e.callee.name == callee
+    }
+    if caller_matches && callee_matches && e.kind == kind { return true }
   }
   false
 }
 
 #[test]
 fn pending_and_external_symbols_have_distinct_identities() {
-  let pending = Symbol.pending("Run")
-  let external = Symbol.external("Run")
-  let local = Symbol.local("cmd:tool/main.go", "Run")
-  assert pending.to_key() != external.to_key()
-  assert pending.display_key() == "Run"
-  assert external.display_key() == "Run"
+  let local = callgraph.Symbol.local("cmd:tool/main.go", "Run")
+  let external = callgraph.Symbol.external("Run")
+  assert local.to_key() != external.to_key()
   assert local.display_key() == "cmd:tool/main.go:Run"
+  assert external.display_key() == "Run"
 }
 
 #[test]
@@ -122,7 +153,7 @@ func Use() {
     name: (field_identifier) @method.name) @method.decl
 ]"
   let cq = "(call_expression function: (_) @callee)"
-  let graph = Graph.analyze(source.bytes(), dq, cq)
+  let graph = analyze(source.bytes())
   assert has_decl(graph.decls, "Counter.Inc")
   assert has_decl(graph.decls, "Counter.Reset")
   assert has_edge(graph.edges, "Use", "Counter.Inc", "method")
@@ -141,7 +172,7 @@ func Bar() {}
 "
   let dq = "(function_declaration name: (identifier) @fn.name)"
   let cq = "(call_expression function: (_) @callee)"
-  let graph = Graph.analyze(source.bytes(), dq, cq)
+  let graph = analyze(source.bytes())
   assert graph.edges.length() == 1
   assert graph.edges[0].caller.name == "Foo"
   assert graph.edges[0].callee.name == "Bar"
@@ -157,32 +188,24 @@ func Bar() {}
 "
   let dq = "(function_declaration name: (identifier) @fn.name)"
   let cq = "(call_expression function: (_) @callee)"
-  let graph = Graph.analyze(source.bytes(), dq, cq)
+  let graph = analyze(source.bytes())
   let out = render_graph(graph)
   let lines = out.split("\n")
-  assert lines[0] == "def Bar"
-  assert lines[1] == "def Foo"
-  assert lines[2] == "edge Foo -> Bar (local)"
+  assert lines[0] == "def test.go:Bar"
+  assert lines[1] == "def test.go:Foo"
+  assert lines[2] == "edge test.go:Foo -> test.go:Bar (local)"
 }
 
 #[test]
 fn diff_reports_added_and_removed_edges() {
   let dq = "(function_declaration name: (identifier) @fn.name)"
   let cq = "(call_expression function: (_) @callee)"
-  let a = Graph.analyze(
-    "package x\nfunc Foo() { fmt.Println() }\n".bytes(),
-    dq,
-    cq,
-  )
-  let b = Graph.analyze(
-    "package x\nfunc Foo() { Bar() }\nfunc Bar() {}\n".bytes(),
-    dq,
-    cq,
-  )
+  let a = analyze("package x\nfunc Foo() { fmt.Println() }\n".bytes())
+  let b = analyze("package x\nfunc Foo() { Bar() }\nfunc Bar() {}\n".bytes())
   let out = diff_edges(a, b)
-  assert out.contains("- edge Foo -> fmt.Println (external)")
-  assert out.contains("+ def Bar")
-  assert out.contains("+ edge Foo -> Bar (local)")
+  assert out.contains("- edge test.go:Foo -> fmt.Println (external)")
+  assert out.contains("+ def test.go:Bar")
+  assert out.contains("+ edge test.go:Foo -> test.go:Bar (local)")
 }
 
 fn std_dq() -> string {
@@ -281,7 +304,7 @@ func (b B) Save() {}
 }
 
 fn test_root() -> string {
-  filepath.Dir(filepath.Dir(os.Getwd().unwrap_or(".")))
+  filepath.Dir(filepath.Dir(filepath.Dir(os.Getwd().unwrap_or("."))))
 }
 
 #[test]

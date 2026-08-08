@@ -1,5 +1,22 @@
 import ts "go:github.com/tree-sitter/go-tree-sitter"
 
+pub struct ExtractedCall {
+  pub caller: string,
+  pub callee: string,
+  pub kind: string,
+}
+
+pub struct ExtractedFile {
+  pub path: string,
+  pub declarations: Slice<string>,
+  pub calls: Slice<ExtractedCall>,
+}
+
+pub interface Adapter {
+  fn supports(path: string) -> bool
+  fn extract(path: string, source: Slice<byte>) -> ExtractedFile
+}
+
 struct Capture {
   name: string,
   kind: string,

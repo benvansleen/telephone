@@ -1,0 +1,146 @@
+import "go:github.com/telephone/ts-shim"
+import ts "go:github.com/tree-sitter/go-tree-sitter"
+import tsgo "go:github.com/telephone/tsgrammar"
+
+import "treesitter"
+
+pub struct Go {}
+
+impl Go {
+  pub fn new() -> Go {
+    Go {}
+  }
+
+  pub fn supports(self, path: string) -> bool {
+    path.ends_with(".go")
+  }
+
+  pub fn extract(self, path: string, source: Slice<byte>) -> treesitter.ExtractedFile {
+    let parser = ts.NewParser()
+    let language = ts.NewLanguage(tsgo.GoLanguage())
+    if let Err(_) = parser.SetLanguage(language) { return empty_file(path) }
+    let Some(tree) = parser.Parse(source, tsshim.NewEmptyTree()) else {
+      return empty_file(path)
+    }
+    defer tree.Close()
+
+    let mut declarations: Slice<string> = Slice.new()
+    if let Ok(query) = treesitter.compile(language, declarations_query()) {
+      defer query.Close()
+      for group in treesitter.matches(query, tree.RootNode(), source) {
+        let mut name: Option<string> = None
+        let mut receiver: Option<string> = None
+        for hit in group {
+          let mut node = hit.node
+          match hit.name {
+            "fn.name" | "method.name" => name = Some(node.Utf8Text(source)),
+            "method.receiver" => receiver = Some(trim_pointer(node.Utf8Text(
+              source,
+            ))),
+            _ => (),
+          }
+        }
+        let Some(name) = name else {
+          continue
+        }
+        let name = receiver.map_or(
+          name,
+          |receiver_name| f"{receiver_name}.{name}",
+        )
+        if !declarations.contains(name) {
+          declarations = declarations.append(name)
+        }
+      }
+    }
+
+    let mut calls: Slice<treesitter.ExtractedCall> = Slice.new()
+    let mut seen: Slice<string> = Slice.new()
+    if let Ok(query) = treesitter.compile(language, calls_query()) {
+      defer query.Close()
+      for group in treesitter.matches(query, tree.RootNode(), source) {
+        for hit in group {
+          if hit.name != "callee" { continue }
+          let mut node = hit.node
+          let callee = node.Utf8Text(source)
+          let kind = if node.Kind() == "identifier" && declarations.contains(
+            callee,
+          ) {
+            "local"
+          } else {
+            "unresolved"
+          }
+          let caller = caller_of(node, source)
+          let key = f"{caller}|{kind}|{callee}"
+          if seen.contains(key) { continue }
+          seen = seen.append(key)
+          calls = calls.append(
+            treesitter.ExtractedCall { caller, callee, kind },
+          )
+        }
+      }
+    }
+    treesitter.ExtractedFile { path, declarations, calls }
+  }
+}
+
+fn empty_file(path: string) -> treesitter.ExtractedFile {
+  treesitter.ExtractedFile {
+    path,
+    declarations: Slice.new(),
+    calls: Slice.new(),
+  }
+}
+
+fn declarations_query() -> string {
+  "[
+  (function_declaration name: (identifier) @fn.name)
+  (method_declaration
+    receiver: (parameter_list
+      (parameter_declaration type: (_) @method.receiver))
+    name: (field_identifier) @method.name)
+]"
+}
+
+fn calls_query() -> string {
+  "(call_expression function: (_) @callee)"
+}
+
+fn caller_of(start: ts.Node, source: Slice<byte>) -> string {
+  let mut node = start
+  let mut current = node.Parent()
+  loop {
+    let Some(parent) = current else {
+      return "<global>"
+    }
+    match parent.Kind() {
+      "function_declaration" => return fn_name(parent, source),
+      "method_declaration" => return method_identity(parent, source),
+      _ => current = parent.Parent(),
+    }
+  }
+}
+
+fn fn_name(declaration: Ref<ts.Node>, source: Slice<byte>) -> string {
+  declaration.ChildByFieldName("name").map_or("", |node| node.Utf8Text(source))
+}
+
+fn method_identity(declaration: Ref<ts.Node>, source: Slice<byte>) -> string {
+  let receiver = declaration
+    .ChildByFieldName("receiver")
+    .map_or("", |node| receiver_type(node, source))
+  f"{receiver}.{fn_name(declaration, source)}"
+}
+
+fn receiver_type(receiver: Ref<ts.Node>, source: Slice<byte>) -> string {
+  receiver
+    .NamedChild(0)
+    .map_or("", |parameter| {
+      parameter
+        .ChildByFieldName("type")
+        .map_or("", |node| trim_pointer(node.Utf8Text(source)))
+    })
+}
+
+fn trim_pointer(text: string) -> string {
+  if text.starts_with("*") { text.substring(1..text.length()) } else { text }
+}
