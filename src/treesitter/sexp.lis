@@ -1,11 +1,11 @@
 import "go:strings"
 import ts "go:github.com/tree-sitter/go-tree-sitter"
 
-fn sexp(node: Ref<ts.Node>, source: Slice<byte>) -> string {
+pub fn sexp(node: Ref<ts.Node>, source: Slice<byte>) -> string {
   render(node, source, 0)
 }
 
-fn render(node: Ref<ts.Node>, source: Slice<byte>, depth: int) -> string {
+pub fn render(node: Ref<ts.Node>, source: Slice<byte>, depth: int) -> string {
   let kind = node.Kind()
   let count = node.ChildCount()
 

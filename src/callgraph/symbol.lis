@@ -1,5 +1,3 @@
-import "go:strings"
-
 pub enum SymbolLocation {
   File { path: string },
   External,

@@ -24,7 +24,7 @@ pub interface Adapter {
   fn extract(path: string, source: Slice<byte>) -> ExtractedFile
 }
 
-struct Capture {
+pub struct Capture {
   name: string,
   kind: string,
   text: string,
@@ -65,7 +65,7 @@ pub fn compile(language: Ref<ts.Language>, source: string) -> Result<Ref<ts.Quer
   query.ok_or_else(|| f"{err.Message} at {err.Row}:{err.Column}")
 }
 
-fn captures(query: Ref<ts.Query>, root: Ref<ts.Node>, text: Slice<byte>) -> Slice<Capture> {
+pub fn captures(query: Ref<ts.Query>, root: Ref<ts.Node>, text: Slice<byte>) -> Slice<Capture> {
   let cursor = ts.NewQueryCursor()
   defer cursor.Close()
 
