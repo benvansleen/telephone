@@ -1,0 +1,47 @@
+import "go:runtime"
+
+import "source"
+
+struct ExtractionJob { index: int, file: source.File }
+
+struct ExtractionResult { index: int, file: ExtractedFile }
+
+pub fn extract_files(adapter: Adapter, files: Slice<source.File>) -> Slice<ExtractedFile> {
+  let supported = files.filter(|f| adapter.supports(f.path))
+  if supported.is_empty() { return Slice.new() }
+
+  let jobs = Channel.buffered<ExtractionJob>(supported.length())
+  for (index, file) in supported.enumerate() {
+    jobs.send(ExtractionJob { index, file })
+  }
+  jobs.close()
+
+  let max_workers = runtime.GOMAXPROCS(0)
+  let worker_count = if max_workers < supported.length() {
+    max_workers
+  } else {
+    supported.length()
+  }
+  let results = Channel.buffered<ExtractionResult>(supported.length())
+  for _ in 0..worker_count {
+    task {
+      for job in jobs {
+        results.send(
+          ExtractionResult {
+            index: job.index,
+            file: adapter.extract(job.file.path, job.file.content),
+          },
+        )
+      }
+    }
+  }
+
+  let mut files = Slice.make(supported.length())
+  for _ in 0..supported.length() {
+    if let Some(result) = results.receive() {
+      files[result.index] = result.file
+    }
+  }
+
+  files
+}

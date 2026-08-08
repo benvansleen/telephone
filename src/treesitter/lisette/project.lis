@@ -10,12 +10,7 @@ pub fn analyze_dir(root: string) -> Result<callgraph.Graph, error> {
 
 pub fn analyze_files(files: Slice<source.File>) -> Result<callgraph.Graph, error> {
   let adapter = Lisette.new()
-  let mut extracted: Slice<treesitter.ExtractedFile> = Slice.new()
-  for file in files {
-    if adapter.supports(file.path) {
-      extracted = extracted.append(adapter.extract(file.path, file.content))
-    }
-  }
+  let extracted = treesitter.extract_files(adapter, files)
   Ok(resolve(extracted))
 }
 

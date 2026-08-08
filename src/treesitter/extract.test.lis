@@ -1,0 +1,40 @@
+import "source"
+
+struct TestAdapter {}
+
+impl TestAdapter {
+  fn supports(self, path: string) -> bool {
+    path.ends_with(".test")
+  }
+
+  fn extract(self, path: string, _source: Slice<byte>) -> ExtractedFile {
+    ExtractedFile {
+      path,
+      declarations: [path],
+      calls: Slice.new(),
+      imports: Slice.new(),
+    }
+  }
+}
+
+#[test]
+fn extracts_supported_files_in_input_order() {
+  let files = [
+    source.File { path: "first.test", content: Slice.new() },
+    source.File { path: "ignored.txt", content: Slice.new() },
+    source.File { path: "second.test", content: Slice.new() },
+  ]
+
+  let extracted = extract_files(TestAdapter {}, files)
+
+  assert extracted.length() == 2
+  assert extracted[0].path == "first.test"
+  assert extracted[1].path == "second.test"
+}
+
+#[test]
+fn extracts_no_files_when_none_are_supported() {
+  let files = [source.File { path: "ignored.txt", content: Slice.new() }]
+
+  assert extract_files(TestAdapter {}, files).length() == 0
+}

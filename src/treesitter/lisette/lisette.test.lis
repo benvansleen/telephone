@@ -52,7 +52,7 @@ fn notify(worker: Worker) {}
 fn generic<T>() {}
 ",
   )
-  assert graph.decls.length() == 5
+  assert graph.decls.count() == 5
   assert has_edge(graph, "Worker.run", "helper", "local")
   assert has_edge(graph, "start", "Worker.run", "local")
   assert has_edge(graph, "start", "helper", "local")
