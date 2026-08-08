@@ -1,7 +1,9 @@
 import "go:fmt"
+import "go:golang.org/x/term"
 import "go:os"
 
 import "analyzer"
+import "callgraph"
 import "source"
 
 fn main() {
@@ -57,16 +59,14 @@ fn compare_paths(old_path: string, new_path: string) {
   match analyzer.analyze_dir(old_path) {
     Ok(old) => match analyzer.analyze_dir(new_path) {
       Ok(new) => {
-        fmt.Println()
-        fmt.Println(f"Call graph diff {old_path} -> {new_path}")
-        fmt.Println(old.diff_trees(new))
+        print_graph_diff(f"Call graph diff {old_path} -> {new_path}", old, new)
       },
       Err(err) => {
-        fmt.Println(f"telephone: {err.Error()}")
+        let _ = fmt.Println(f"telephone: {err.Error()}")
       },
     },
     Err(err) => {
-      fmt.Println(f"telephone: {err.Error()}")
+      let _ = fmt.Println(f"telephone: {err.Error()}")
     },
   }
 }
@@ -75,18 +75,36 @@ fn print_diff(old: source.Snapshot, new: source.Snapshot) {
   match analyzer.analyze_files(old.files) {
     Ok(old_graph) => match analyzer.analyze_files(new.files) {
       Ok(new_graph) => {
-        fmt.Println()
-        fmt.Println(f"Call graph diff {old.label} -> {new.label}")
-        fmt.Println(old_graph.diff_trees(new_graph))
+        print_graph_diff(
+          f"Call graph diff {old.label} -> {new.label}",
+          old_graph,
+          new_graph,
+        )
       },
       Err(err) => {
-        fmt.Println(f"telephone: {err.Error()}")
+        let _ = fmt.Println(f"telephone: {err.Error()}")
       },
     },
     Err(err) => {
-      fmt.Println(f"telephone: {err.Error()}")
+      let _ = fmt.Println(f"telephone: {err.Error()}")
     },
   }
+}
+
+fn print_graph_diff(title: string, old: callgraph.Graph, new: callgraph.Graph) {
+  let color = color_enabled()
+  let _ = fmt.Println()
+  if color {
+    let _ = fmt.Println(f"\x1b[1;37m{title}\x1b[0m")
+    let _ = fmt.Println(old.diff_trees_ansi(new))
+  } else {
+    let _ = fmt.Println(title)
+    let _ = fmt.Println(old.diff_trees(new))
+  }
+}
+
+fn color_enabled() -> bool {
+  os.LookupEnv("NO_COLOR").is_none() && term.IsTerminal(os.Stdout.Fd() as int)
 }
 
 fn usage() {

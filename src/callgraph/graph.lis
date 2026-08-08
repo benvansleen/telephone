@@ -1,6 +1,22 @@
 import "go:slices"
 import "go:strings"
 
+const RESET = "\x1b[0m"
+
+const HEADER = "\x1b[1;36m"
+
+const CONTEXT = "\x1b[1m"
+
+const CONTEXT_LOCATION = "\x1b[2;3m"
+
+const ADDED = "\x1b[38;5;114;48;2;25;43;34m"
+
+const ADDED_LOCATION = "\x1b[2;3;38;5;114;48;2;25;43;34m"
+
+const REMOVED = "\x1b[38;5;210;48;2;54;29;32m"
+
+const REMOVED_LOCATION = "\x1b[2;3;38;5;210;48;2;54;29;32m"
+
 pub struct Edge {
   pub caller: Symbol,
   pub callee: Symbol,
@@ -71,33 +87,44 @@ impl Graph {
         let in_b = b_names.contains(name)
         if !in_b {
           fn_lines = fn_lines.append(f"  - {name}")
+          let identity = Symbol.local(file, name).to_key()
+          let callees = a_callees.get(identity).unwrap_or_else(|| Slice.new())
+          for callee in callees {
+            fn_lines = fn_lines.append(f"      {callee.display_callee(file)}")
+          }
         } else if !in_a {
           fn_lines = fn_lines.append(f"  + {name}")
+          let identity = Symbol.local(file, name).to_key()
+          let callees = b_callees.get(identity).unwrap_or_else(|| Slice.new())
+          for callee in callees {
+            fn_lines = fn_lines.append(f"      {callee.display_callee(file)}")
+          }
         } else {
           let identity = Symbol.local(file, name).to_key()
           let ac = a_callees.get(identity).unwrap_or_else(|| Slice.new())
           let bc = b_callees.get(identity).unwrap_or_else(|| Slice.new())
-          let mut added: Slice<string> = Slice.new()
-          for c in bc {
-            if !has_symbol(ac, c) {
-              added = added.append(f"    + {c.display_callee(file)}")
-            }
-          }
-          let mut removed: Slice<string> = Slice.new()
-          for c in ac {
-            if !has_symbol(bc, c) {
-              removed = removed.append(f"    - {c.display_callee(file)}")
-            }
-          }
-          if added.length() > 0 || removed.length() > 0 {
-            slices.Sort(added)
-            slices.Sort(removed)
+          let changed = ac.find(|callee| !has_symbol(bc, callee)).is_some() ||
+          bc.find(|callee| !has_symbol(ac, callee)).is_some()
+          if changed {
             fn_lines = fn_lines.append(f"  {name}")
-            for l in added {
-              fn_lines = fn_lines.append(l)
+            for callee in bc {
+              let prefix = if has_symbol(ac, callee) {
+                "      "
+              } else {
+                "    + "
+              }
+              fn_lines = fn_lines.append(
+                f"{prefix}{callee.display_callee(file)}",
+              )
             }
-            for l in removed {
-              fn_lines = fn_lines.append(l)
+            // Removed calls no longer have a source position in the new function,
+            // so retain their order from the previous version after current calls.
+            for callee in ac {
+              if !has_symbol(bc, callee) {
+                fn_lines = fn_lines.append(
+                  f"    - {callee.display_callee(file)}",
+                )
+              }
             }
           }
         }
@@ -111,6 +138,16 @@ impl Graph {
       }
     }
     strings.Join(lines, "\n")
+  }
+
+  pub fn diff_trees_ansi(self, other: Graph) -> string {
+    let diff = self.diff_trees(other)
+    if diff == "" { return "" }
+    let mut styled: Slice<string> = Slice.new()
+    for line in diff.split("\n") {
+      styled = styled.append(style_diff_line(line))
+    }
+    strings.Join(styled, "\n")
   }
 
   fn adjacency(self) -> Map<string, Slice<Symbol>> {
@@ -162,4 +199,42 @@ impl Graph {
     }
     strings.Join(lines, "\n")
   }
+}
+
+fn style_diff_line(line: string) -> string {
+  if line.ends_with(":") { return f"{HEADER}{line}{RESET}" }
+  if line.starts_with("  + ") || line.starts_with("    + ") {
+    return style_change(line, ADDED, ADDED_LOCATION)
+  }
+  if line.starts_with("  - ") || line.starts_with("    - ") {
+    return style_change(line, REMOVED, REMOVED_LOCATION)
+  }
+  if line.starts_with("  ") && !line.starts_with("    ") {
+    return style_context(line)
+  }
+  style_neutral(line)
+}
+
+fn style_change(line: string, style: string, location_style: string) -> string {
+  let parts = line.split(" (")
+  if parts.length() == 2 {
+    return f"{style}{parts[0]} ({location_style}{parts[1]}{RESET}"
+  }
+  f"{style}{line}{RESET}"
+}
+
+fn style_context(line: string) -> string {
+  let parts = line.split(" (")
+  if parts.length() == 2 {
+    return f"{CONTEXT}{parts[0]} ({CONTEXT_LOCATION}{parts[1]}{RESET}"
+  }
+  f"{CONTEXT}{line}{RESET}"
+}
+
+fn style_neutral(line: string) -> string {
+  let parts = line.split(" (")
+  if parts.length() == 2 {
+    return f"{parts[0]} ({CONTEXT_LOCATION}{parts[1]}{RESET}"
+  }
+  line
 }

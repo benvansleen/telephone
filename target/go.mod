@@ -8,6 +8,7 @@ require (
 	github.com/telephone/ts-shim v0.0.0
 	github.com/telephone/tsgrammar v0.0.0
 	github.com/tree-sitter/go-tree-sitter v0.25.0
+	golang.org/x/term v0.45.0
 )
 
 require (
