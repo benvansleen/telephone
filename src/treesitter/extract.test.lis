@@ -2,6 +2,10 @@ import "source"
 
 struct TestAdapter {}
 
+struct CountingAdapter { calls: Channel<()> }
+
+struct CountingWorker { calls: Channel<()> }
+
 impl TestAdapter {
   fn supports(self, path: string) -> bool {
     path.ends_with(".test")
@@ -15,6 +19,30 @@ impl TestAdapter {
     ExtractedFile {
       path,
       declarations: [path],
+      calls: Slice.new(),
+      imports: Slice.new(),
+    }
+  }
+
+  fn close(self) {}
+}
+
+impl CountingAdapter {
+  fn supports(self, path: string) -> bool {
+    path.ends_with(".test")
+  }
+
+  fn worker(self) -> Worker {
+    CountingWorker { calls: self.calls }
+  }
+}
+
+impl CountingWorker {
+  fn extract(self, path: string, _source: Slice<byte>) -> ExtractedFile {
+    self.calls.send(())
+    ExtractedFile {
+      path,
+      declarations: Slice.new(),
       calls: Slice.new(),
       imports: Slice.new(),
     }
@@ -43,4 +71,30 @@ fn extracts_no_files_when_none_are_supported() {
   let files = [source.File { path: "ignored.txt", content: Slice.new() }]
 
   assert extract_files(TestAdapter {}, files).length() == 0
+}
+
+#[test]
+fn extracts_unchanged_files_once_across_file_sets() {
+  let calls = Channel.buffered<()>(8)
+  let old_files = [
+    source.File { path: "same.test", content: "same".bytes() },
+    source.File { path: "changed.test", content: "old".bytes() },
+  ]
+  let new_files = [
+    source.File { path: "same.test", content: "same".bytes() },
+    source.File { path: "changed.test", content: "new".bytes() },
+    source.File { path: "added.test", content: "added".bytes() },
+  ]
+
+  let (old_extracted, new_extracted) = extract_file_sets(
+    CountingAdapter { calls },
+    old_files,
+    new_files,
+  )
+
+  assert calls.length() == 4
+  assert old_extracted.length() == 2
+  assert new_extracted.length() == 3
+  assert old_extracted[0].path == "same.test"
+  assert new_extracted[0].path == "same.test"
 }

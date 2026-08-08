@@ -20,3 +20,33 @@ func boot() {}".bytes(),
   assert graph.edges[0].callee.name == "boot"
   assert graph.edges[0].kind == "external"
 }
+
+#[test]
+fn resolves_reused_files_against_each_snapshot() {
+  let caller = source.File {
+    path: "caller.go",
+    content: "package main
+func caller() { helper() }".bytes(),
+  }
+  let old_files = [
+    caller,
+    source.File {
+      path: "helper.go",
+      content: "package main
+func helper() {}".bytes(),
+    },
+  ]
+  let new_files = [
+    caller,
+    source.File {
+      path: "helper.go",
+      content: "package main
+func replacement() {}".bytes(),
+    },
+  ]
+
+  let (old_graph, new_graph) = analyze_file_sets(old_files, new_files)
+
+  assert old_graph.edges[0].kind == "local"
+  assert new_graph.edges[0].kind == "external"
+}

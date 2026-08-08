@@ -12,7 +12,31 @@ pub fn analyze_files(files: Slice<source.File>) -> Result<callgraph.Graph, error
   Ok(resolve(extracted))
 }
 
-fn resolve(files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
+pub fn analyze_file_sets(
+  old_files: Slice<source.File>,
+  new_files: Slice<source.File>,
+) -> (callgraph.Graph, callgraph.Graph) {
+  let adapter = Go.new()
+  let (old_extracted, new_extracted) = treesitter.extract_file_sets(
+    adapter,
+    old_files,
+    new_files,
+  )
+  let old_result = Channel.buffered<callgraph.Graph>(1)
+  let new_result = Channel.buffered<callgraph.Graph>(1)
+  task {
+    old_result.send(resolve(old_extracted))
+  }
+  task {
+    new_result.send(resolve(new_extracted))
+  }
+  (
+    old_result.receive().unwrap_or_else(|| resolve(old_extracted)),
+    new_result.receive().unwrap_or_else(|| resolve(new_extracted)),
+  )
+}
+
+pub fn resolve(files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
   let mut functions: Map<string, callgraph.Symbol> = Map.new()
   let mut methods: Map<string, Option<callgraph.Symbol>> = Map.new()
   let mut declarations = callgraph.Symbols.new()

@@ -10,8 +10,7 @@ pub struct GoWorker {
   ready: bool,
   parser: Ref<ts.Parser>,
   cursor: Ref<ts.QueryCursor>,
-  declarations_query: Option<Ref<ts.Query>>,
-  calls_query: Option<Ref<ts.Query>>,
+  query: Option<Ref<ts.Query>>,
 }
 
 impl Go {
@@ -39,23 +38,12 @@ impl GoWorker {
     let parser = ts.NewParser()
     let language = ts.NewLanguage(tsgo.GoLanguage())
     let ready = parser.SetLanguage(language).is_ok()
-    let compiled_declarations = if ready {
-      treesitter.compile(language, declarations_query()).ok()
+    let compiled = if ready {
+      treesitter.compile(language, extraction_query()).ok()
     } else {
       None
     }
-    let compiled_calls = if ready {
-      treesitter.compile(language, calls_query()).ok()
-    } else {
-      None
-    }
-    GoWorker {
-      ready,
-      parser,
-      cursor: ts.NewQueryCursor(),
-      declarations_query: compiled_declarations,
-      calls_query: compiled_calls,
-    }
+    GoWorker { ready, parser, cursor: ts.NewQueryCursor(), query: compiled }
   }
 
   pub fn extract(self, path: string, source: Slice<byte>) -> treesitter.ExtractedFile {
@@ -69,7 +57,8 @@ impl GoWorker {
     let mut declarations: Slice<string> = Slice.new()
     let mut declaration_names: Map<string, bool> = Map.new()
     let mut callers: Map<uintptr, string> = Map.new()
-    if let Some(query) = self.declarations_query {
+    let mut pending_calls: Slice<treesitter.ExtractedCall> = Slice.new()
+    if let Some(query) = self.query {
       treesitter.for_each_match_with_cursor(
         self.cursor,
         query,
@@ -81,12 +70,21 @@ impl GoWorker {
           let mut declaration = None
           for hit in group {
             let mut node = hit.node
-            if declaration.is_none() { declaration = declaration_of(node) }
             match hit.name {
-              "fn.name" | "method.name" => name = Some(node.Utf8Text(source)),
+              "fn.name" | "method.name" => {
+                name = Some(node.Utf8Text(source))
+                declaration = declaration_of(node)
+              },
               "method.receiver" => receiver = Some(trim_pointer(node.Utf8Text(
                 source,
               ))),
+              "callee" => pending_calls = pending_calls.append(
+                treesitter.ExtractedCall {
+                  caller: caller_of(node, source, callers),
+                  callee: node.Utf8Text(source),
+                  kind: node.Kind(),
+                },
+              ),
               _ => (),
             }
           }
@@ -109,32 +107,22 @@ impl GoWorker {
 
     let mut calls = Slice.new()
     let mut seen = Map.new()
-    if let Some(query) = self.calls_query {
-      treesitter.for_each_match_with_cursor(
-        self.cursor,
-        query,
-        tree.RootNode(),
-        source,
-        |group| {
-          for hit in group {
-            if hit.name != "callee" { continue }
-            let mut node = hit.node
-            let callee = node.Utf8Text(source)
-            let kind = if node.Kind() == "identifier" && declaration_names
-              .get(callee)
-              .is_some() {
-              "local"
-            } else {
-              "unresolved"
-            }
-            let caller = caller_of(node, source, callers)
-            let key = f"{caller}|{kind}|{callee}"
-            if seen.get(key).is_some() { continue }
-            seen[key] = true
-            calls = calls.append(
-              treesitter.ExtractedCall { caller, callee, kind },
-            )
-          }
+    for call in pending_calls {
+      let kind = if call.kind == "identifier" && declaration_names
+        .get(call.callee)
+        .is_some() {
+        "local"
+      } else {
+        "unresolved"
+      }
+      let key = f"{call.caller}|{kind}|{call.callee}"
+      if seen.get(key).is_some() { continue }
+      seen[key] = true
+      calls = calls.append(
+        treesitter.ExtractedCall {
+          caller: call.caller,
+          callee: call.callee,
+          kind,
         },
       )
     }
@@ -142,8 +130,7 @@ impl GoWorker {
   }
 
   pub fn close(self) {
-    if let Some(query) = self.declarations_query { query.Close() }
-    if let Some(query) = self.calls_query { query.Close() }
+    if let Some(query) = self.query { query.Close() }
     self.cursor.Close()
     self.parser.Close()
   }
@@ -158,18 +145,15 @@ fn empty_file(path: string) -> treesitter.ExtractedFile {
   }
 }
 
-fn declarations_query() -> string {
+fn extraction_query() -> string {
   "[
   (function_declaration name: (identifier) @fn.name)
   (method_declaration
     receiver: (parameter_list
       (parameter_declaration type: (_) @method.receiver))
     name: (field_identifier) @method.name)
+  (call_expression function: (_) @callee)
 ]"
-}
-
-fn calls_query() -> string {
-  "(call_expression function: (_) @callee)"
 }
 
 fn caller_of(

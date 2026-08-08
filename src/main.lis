@@ -56,9 +56,10 @@ fn compare_git(repo: string, old_revision: string, new_revision: Option<string>)
 }
 
 fn compare_paths(old_path: string, new_path: string) {
-  match analyzer.analyze_dir(old_path) {
-    Ok(old) => match analyzer.analyze_dir(new_path) {
-      Ok(new) => {
+  match source.files(old_path) {
+    Ok(old_files) => match source.files(new_path) {
+      Ok(new_files) => {
+        let (old, new) = analyzer.analyze_file_sets(old_files, new_files)
         print_graph_diff(f"Call graph diff {old_path} -> {new_path}", old, new)
       },
       Err(err) => {
@@ -72,23 +73,12 @@ fn compare_paths(old_path: string, new_path: string) {
 }
 
 fn print_diff(old: source.Snapshot, new: source.Snapshot) {
-  match analyzer.analyze_files(old.files) {
-    Ok(old_graph) => match analyzer.analyze_files(new.files) {
-      Ok(new_graph) => {
-        print_graph_diff(
-          f"Call graph diff {old.label} -> {new.label}",
-          old_graph,
-          new_graph,
-        )
-      },
-      Err(err) => {
-        let _ = fmt.Println(f"telephone: {err.Error()}")
-      },
-    },
-    Err(err) => {
-      let _ = fmt.Println(f"telephone: {err.Error()}")
-    },
-  }
+  let (old_graph, new_graph) = analyzer.analyze_file_sets(old.files, new.files)
+  print_graph_diff(
+    f"Call graph diff {old.label} -> {new.label}",
+    old_graph,
+    new_graph,
+  )
 }
 
 fn print_graph_diff(title: string, old: callgraph.Graph, new: callgraph.Graph) {

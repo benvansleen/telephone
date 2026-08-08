@@ -1,28 +1,77 @@
+import "go:bytes"
 import "go:runtime"
 
 import "source"
 
-struct ExtractionJob { index: int, file: source.File }
+struct ExtractionJob { target: ExtractionTarget, file: source.File }
 
-struct ExtractionResult { index: int, file: ExtractedFile }
+struct ExtractionResult { target: ExtractionTarget, file: ExtractedFile }
+
+enum ExtractionTarget {
+  Old { index: int },
+  New { index: int },
+  Both { old_index: int, new_index: int },
+}
 
 pub fn extract_files(adapter: Adapter, files: Slice<source.File>) -> Slice<ExtractedFile> {
-  let supported = files.filter(|f| adapter.supports(f.path))
-  if supported.is_empty() { return Slice.new() }
+  let (extracted, _) = extract_file_sets(adapter, files, Slice.new())
+  extracted
+}
 
-  let jobs = Channel.buffered<ExtractionJob>(supported.length())
-  for (index, file) in supported.enumerate() {
-    jobs.send(ExtractionJob { index, file })
+pub fn extract_file_sets(
+  adapter: Adapter,
+  old_files: Slice<source.File>,
+  new_files: Slice<source.File>,
+) -> (Slice<ExtractedFile>, Slice<ExtractedFile>) {
+  let old_supported = old_files.filter(|file| adapter.supports(file.path))
+  let new_supported = new_files.filter(|file| adapter.supports(file.path))
+
+  let mut new_by_path: Map<string, int> = Map.new()
+  for (index, file) in new_supported.enumerate() {
+    new_by_path[file.path] = index
+  }
+
+  let mut shared: Map<string, bool> = Map.new()
+  let mut pending: Slice<ExtractionJob> = Slice.new()
+  for (old_index, file) in old_supported.enumerate() {
+    if let Some(new_index) = new_by_path.get(file.path) {
+      if bytes.Equal(file.content, new_supported[new_index].content) {
+        shared[file.path] = true
+        pending = pending.append(
+          ExtractionJob {
+            target: ExtractionTarget.Both { old_index, new_index },
+            file,
+          },
+        )
+        continue
+      }
+    }
+    pending = pending.append(
+      ExtractionJob { target: ExtractionTarget.Old { index: old_index }, file },
+    )
+  }
+  for (new_index, file) in new_supported.enumerate() {
+    if shared.get(file.path).unwrap_or(false) { continue }
+    pending = pending.append(
+      ExtractionJob { target: ExtractionTarget.New { index: new_index }, file },
+    )
+  }
+
+  if pending.is_empty() { return (Slice.new(), Slice.new()) }
+
+  let jobs = Channel.buffered<ExtractionJob>(pending.length())
+  for job in pending {
+    jobs.send(job)
   }
   jobs.close()
 
   let max_workers = runtime.GOMAXPROCS(0)
-  let worker_count = if max_workers < supported.length() {
+  let worker_count = if max_workers < pending.length() {
     max_workers
   } else {
-    supported.length()
+    pending.length()
   }
-  let results = Channel.buffered<ExtractionResult>(supported.length())
+  let results = Channel.buffered<ExtractionResult>(pending.length())
   for _ in 0..worker_count {
     task {
       let worker = adapter.worker()
@@ -30,7 +79,7 @@ pub fn extract_files(adapter: Adapter, files: Slice<source.File>) -> Slice<Extra
       for job in jobs {
         results.send(
           ExtractionResult {
-            index: job.index,
+            target: job.target,
             file: worker.extract(job.file.path, job.file.content),
           },
         )
@@ -38,12 +87,20 @@ pub fn extract_files(adapter: Adapter, files: Slice<source.File>) -> Slice<Extra
     }
   }
 
-  let mut files = Slice.make(supported.length())
-  for _ in 0..supported.length() {
+  let mut old_extracted = Slice.make(old_supported.length())
+  let mut new_extracted = Slice.make(new_supported.length())
+  for _ in 0..pending.length() {
     if let Some(result) = results.receive() {
-      files[result.index] = result.file
+      match result.target {
+        ExtractionTarget.Old { index } => old_extracted[index] = result.file,
+        ExtractionTarget.New { index } => new_extracted[index] = result.file,
+        ExtractionTarget.Both { old_index, new_index } => {
+          old_extracted[old_index] = result.file
+          new_extracted[new_index] = result.file
+        },
+      }
     }
   }
 
-  files
+  (old_extracted, new_extracted)
 }

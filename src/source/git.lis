@@ -1,5 +1,8 @@
+import "go:errors"
 import "go:github.com/go-git/go-git/v5"
 import "go:github.com/go-git/go-git/v5/plumbing"
+import "go:os"
+import "go:path/filepath"
 
 pub struct Snapshot {
   pub label: string,
@@ -26,27 +29,24 @@ pub fn commit(root: string, revision: string) -> Result<Snapshot, error> {
 
 pub fn worktree(root: string) -> Result<Snapshot, error> {
   let repository = git.PlainOpen(root)?
-  let tree = repository.Worktree()?
-  let status = tree.Status()?
-  let hash = repository.ResolveRevision("HEAD" as plumbing.Revision)?
-  let head = repository.CommitObject(hash.*)?
-  let iterator = head.Files()?
-  defer iterator.Close()
-  let mut tracked_paths: Map<string, bool> = Map.new()
-  iterator.ForEach(|file| {
-    if supported(file.Name) { tracked_paths[file.Name] = true }
-    Ok(())
-  })?
-  let disk_files = files(root)?
+  let Some(storer) = repository.Storer else {
+    return Err(errors.New("repository has no index storage"))
+  }
+  let git_index = storer.Index()?
+  let mut seen: Map<string, bool> = Map.new()
   let mut tracked: Slice<File> = Slice.new()
-  for file in disk_files {
-    if tracked_paths.get(file.path).unwrap_or(false) {
-      tracked = tracked.append(file)
+  for entry in git_index.Entries {
+    let Some(entry) = entry else {
       continue
     }
-    if let Some(state) = status.0.get(file.path) {
-      if state.Staging == git.Added { tracked = tracked.append(file) }
+    if !supported(entry.Name) || seen.get(entry.Name).unwrap_or(false) {
+      continue
     }
+    seen[entry.Name] = true
+    let Ok(content) = os.ReadFile(filepath.Join(root, entry.Name)) else {
+      continue
+    }
+    tracked = tracked.append(File { path: entry.Name, content })
   }
   Ok(Snapshot { label: "worktree", files: tracked })
 }

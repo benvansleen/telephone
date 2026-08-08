@@ -10,9 +10,7 @@ pub struct LisetteWorker {
   ready: bool,
   parser: Ref<ts.Parser>,
   cursor: Ref<ts.QueryCursor>,
-  declarations_query: Option<Ref<ts.Query>>,
-  calls_query: Option<Ref<ts.Query>>,
-  imports_query: Option<Ref<ts.Query>>,
+  query: Option<Ref<ts.Query>>,
 }
 
 impl Lisette {
@@ -40,18 +38,8 @@ impl LisetteWorker {
     let parser = ts.NewParser()
     let language = ts.NewLanguage(tsgrammar.LisetteLanguage())
     let ready = parser.SetLanguage(language).is_ok()
-    let compiled_declarations = if ready {
-      treesitter.compile(language, declarations_query()).ok()
-    } else {
-      None
-    }
-    let compiled_calls = if ready {
-      treesitter.compile(language, calls_query()).ok()
-    } else {
-      None
-    }
-    let compiled_imports = if ready {
-      treesitter.compile(language, imports_query()).ok()
+    let compiled = if ready {
+      treesitter.compile(language, extraction_query()).ok()
     } else {
       None
     }
@@ -59,9 +47,7 @@ impl LisetteWorker {
       ready,
       parser,
       cursor: ts.NewQueryCursor(),
-      declarations_query: compiled_declarations,
-      calls_query: compiled_calls,
-      imports_query: compiled_imports,
+      query: compiled,
     }
   }
 
@@ -76,61 +62,9 @@ impl LisetteWorker {
     let mut declarations: Slice<string> = Slice.new()
     let mut declaration_names: Map<string, bool> = Map.new()
     let mut callers: Map<uintptr, string> = Map.new()
-    if let Some(query) = self.declarations_query {
-      treesitter.for_each_match_with_cursor(
-        self.cursor,
-        query,
-        tree.RootNode(),
-        source,
-        |group| {
-          for hit in group {
-            if hit.name != "name" { continue }
-            let mut node = hit.node
-            let name = node.Utf8Text(source)
-            let declaration = declaration_of(node)
-            let identity = impl_type(declaration, source).map_or(
-              name,
-              |type_name| f"{type_name}.{name}",
-            )
-            if declaration_names.get(identity).is_none() {
-              declaration_names[identity] = true
-              declarations = declarations.append(identity)
-            }
-            if let Some(declaration) = declaration {
-              callers[declaration.Id()] = identity
-            }
-          }
-        },
-      )
-    }
-
-    let mut calls: Slice<treesitter.ExtractedCall> = Slice.new()
-    let mut seen: Map<string, bool> = Map.new()
-    if let Some(query) = self.calls_query {
-      treesitter.for_each_match_with_cursor(
-        self.cursor,
-        query,
-        tree.RootNode(),
-        source,
-        |group| {
-          for hit in group {
-            if hit.name != "callee" { continue }
-            let mut node = hit.node
-            let callee = node.Utf8Text(source)
-            let caller = caller_of(node, source, callers)
-            let key = f"{caller}|{callee}"
-            if seen.get(key).is_some() { continue }
-            seen[key] = true
-            calls = calls.append(
-              treesitter.ExtractedCall { caller, callee, kind: "unresolved" },
-            )
-          }
-        },
-      )
-    }
-
+    let mut pending_calls: Slice<treesitter.ExtractedCall> = Slice.new()
     let mut imports: Slice<treesitter.ExtractedImport> = Slice.new()
-    if let Some(query) = self.imports_query {
+    if let Some(query) = self.query {
       treesitter.for_each_match_with_cursor(
         self.cursor,
         query,
@@ -142,6 +76,28 @@ impl LisetteWorker {
           for hit in group {
             let mut node = hit.node
             match hit.name {
+              "name" => {
+                let name = node.Utf8Text(source)
+                let declaration = declaration_of(node)
+                let identity = impl_type(declaration, source).map_or(
+                  name,
+                  |type_name| f"{type_name}.{name}",
+                )
+                if declaration_names.get(identity).is_none() {
+                  declaration_names[identity] = true
+                  declarations = declarations.append(identity)
+                }
+                if let Some(declaration) = declaration {
+                  callers[declaration.Id()] = identity
+                }
+              },
+              "callee" => pending_calls = pending_calls.append(
+                treesitter.ExtractedCall {
+                  caller: caller_of(node, source, callers),
+                  callee: node.Utf8Text(source),
+                  kind: "unresolved",
+                },
+              ),
               "alias" => alias = node.Utf8Text(source),
               "path" => import_path = unquote(node.Utf8Text(source)),
               _ => (),
@@ -159,13 +115,20 @@ impl LisetteWorker {
         },
       )
     }
+
+    let mut calls: Slice<treesitter.ExtractedCall> = Slice.new()
+    let mut seen: Map<string, bool> = Map.new()
+    for call in pending_calls {
+      let key = f"{call.caller}|{call.callee}"
+      if seen.get(key).is_some() { continue }
+      seen[key] = true
+      calls = calls.append(call)
+    }
     treesitter.ExtractedFile { path, declarations, calls, imports }
   }
 
   pub fn close(self) {
-    if let Some(query) = self.declarations_query { query.Close() }
-    if let Some(query) = self.calls_query { query.Close() }
-    if let Some(query) = self.imports_query { query.Close() }
+    if let Some(query) = self.query { query.Close() }
     self.cursor.Close()
     self.parser.Close()
   }
@@ -180,23 +143,17 @@ fn empty_file(path: string) -> treesitter.ExtractedFile {
   }
 }
 
-fn declarations_query() -> string {
-  "(function_item name: (identifier) @name)"
-}
-
-fn calls_query() -> string {
+fn extraction_query() -> string {
   "[
+  (function_item name: (identifier) @name)
   (call_expression function: (_) @callee)
   (generic_call_expression function: (_) @callee)
   (binary_expression operator: \"|>\" right: (identifier) @callee)
   (binary_expression operator: \"|>\" right: (field_expression) @callee)
+  (import_declaration
+    alias: (identifier)? @alias
+    path: (string_literal) @path)
 ]"
-}
-
-fn imports_query() -> string {
-  "(import_declaration
-  alias: (identifier)? @alias
-  path: (string_literal) @path)"
 }
 
 fn caller_of(

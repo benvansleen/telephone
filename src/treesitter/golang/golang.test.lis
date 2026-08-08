@@ -398,7 +398,7 @@ func stableWork() {}
   assert out ==
   "a.go:\n  Boot\n      stableWork (b.go)\n    - oldWork (b.go)\n    + newWork (b.go)\nb.go:\n  - oldWork\n      stableWork\n  + newWork\n      stableWork"
   assert ga.diff_trees_ansi(gb) ==
-  "\x1b[1;36ma.go:\x1b[0m\n\x1b[1m  Boot\x1b[0m\n      stableWork \x1b[2;3m(b.go)\x1b[0m\n\x1b[38;5;210;48;2;54;29;32m    - oldWork (\x1b[2;3;38;5;210;48;2;54;29;32mb.go)\x1b[0m\n\x1b[38;5;114;48;2;25;43;34m    + newWork (\x1b[2;3;38;5;114;48;2;25;43;34mb.go)\x1b[0m\n\x1b[1;36mb.go:\x1b[0m\n\x1b[38;5;210;48;2;54;29;32m  - oldWork\x1b[0m\n      stableWork\n\x1b[38;5;114;48;2;25;43;34m  + newWork\x1b[0m\n      stableWork"
+  "\x1b[1;36ma.go:\x1b[0m\n\x1b[1m  Boot\x1b[0m\n      stableWork \x1b[2;3m(b.go)\x1b[0m\n\x1b[38;5;210;48;2;54;29;32m    - oldWork \x1b[2;3;38;5;210;48;2;54;29;32m(b.go)\x1b[0m\n\x1b[38;5;114;48;2;25;43;34m    + newWork \x1b[2;3;38;5;114;48;2;25;43;34m(b.go)\x1b[0m\n\x1b[1;36mb.go:\x1b[0m\n\x1b[38;5;210;48;2;54;29;32m  - oldWork\x1b[0m\n      stableWork\n\x1b[38;5;114;48;2;25;43;34m  + newWork\x1b[0m\n      stableWork"
 }
 
 #[test]

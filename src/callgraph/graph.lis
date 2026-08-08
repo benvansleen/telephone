@@ -338,7 +338,7 @@ fn style_diff_line(line: string) -> string {
 fn style_change(line: string, style: string, location_style: string) -> string {
   let parts = line.split(" (")
   if parts.length() == 2 {
-    return f"{style}{parts[0]} ({location_style}{parts[1]}{RESET}"
+    return f"{style}{parts[0]} {location_style}({parts[1]}{RESET}"
   }
   f"{style}{line}{RESET}"
 }
@@ -346,7 +346,7 @@ fn style_change(line: string, style: string, location_style: string) -> string {
 fn style_context(line: string) -> string {
   let parts = line.split(" (")
   if parts.length() == 2 {
-    return f"{CONTEXT}{parts[0]} ({CONTEXT_LOCATION}{parts[1]}{RESET}"
+    return f"{CONTEXT}{parts[0]} {CONTEXT_LOCATION}({parts[1]}{RESET}"
   }
   f"{CONTEXT}{line}{RESET}"
 }
