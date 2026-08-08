@@ -6,6 +6,14 @@ import "treesitter"
 
 pub struct Go {}
 
+pub struct GoWorker {
+  ready: bool,
+  parser: Ref<ts.Parser>,
+  cursor: Ref<ts.QueryCursor>,
+  declarations_query: Option<Ref<ts.Query>>,
+  calls_query: Option<Ref<ts.Query>>,
+}
+
 impl Go {
   pub fn new() -> Go {
     Go {}
@@ -15,71 +23,129 @@ impl Go {
     path.ends_with(".go")
   }
 
+  pub fn worker(self) -> treesitter.Worker {
+    GoWorker.new()
+  }
+
   pub fn extract(self, path: string, source: Slice<byte>) -> treesitter.ExtractedFile {
+    let worker = GoWorker.new()
+    defer worker.close()
+    worker.extract(path, source)
+  }
+}
+
+impl GoWorker {
+  fn new() -> GoWorker {
     let parser = ts.NewParser()
-    defer parser.Close()
     let language = ts.NewLanguage(tsgo.GoLanguage())
-    if let Err(_) = parser.SetLanguage(language) { return empty_file(path) }
-    let Some(tree) = parser.Parse(source, tsshim.NewEmptyTree()) else {
+    let ready = parser.SetLanguage(language).is_ok()
+    let compiled_declarations = if ready {
+      treesitter.compile(language, declarations_query()).ok()
+    } else {
+      None
+    }
+    let compiled_calls = if ready {
+      treesitter.compile(language, calls_query()).ok()
+    } else {
+      None
+    }
+    GoWorker {
+      ready,
+      parser,
+      cursor: ts.NewQueryCursor(),
+      declarations_query: compiled_declarations,
+      calls_query: compiled_calls,
+    }
+  }
+
+  pub fn extract(self, path: string, source: Slice<byte>) -> treesitter.ExtractedFile {
+    if !self.ready { return empty_file(path) }
+    self.parser.Reset()
+    let Some(tree) = self.parser.Parse(source, tsshim.NewEmptyTree()) else {
       return empty_file(path)
     }
     defer tree.Close()
 
     let mut declarations: Slice<string> = Slice.new()
-    if let Ok(query) = treesitter.compile(language, declarations_query()) {
-      defer query.Close()
-      treesitter.for_each_match(query, tree.RootNode(), source, |group| {
-        let mut name: Option<string> = None
-        let mut receiver: Option<string> = None
-        for hit in group {
-          let mut node = hit.node
-          match hit.name {
-            "fn.name" | "method.name" => name = Some(node.Utf8Text(source)),
-            "method.receiver" => receiver = Some(trim_pointer(node.Utf8Text(
-              source,
-            ))),
-            _ => (),
+    let mut declaration_names: Map<string, bool> = Map.new()
+    let mut callers: Map<uintptr, string> = Map.new()
+    if let Some(query) = self.declarations_query {
+      treesitter.for_each_match_with_cursor(
+        self.cursor,
+        query,
+        tree.RootNode(),
+        source,
+        |group| {
+          let mut name = None
+          let mut receiver = None
+          let mut declaration = None
+          for hit in group {
+            let mut node = hit.node
+            if declaration.is_none() { declaration = declaration_of(node) }
+            match hit.name {
+              "fn.name" | "method.name" => name = Some(node.Utf8Text(source)),
+              "method.receiver" => receiver = Some(trim_pointer(node.Utf8Text(
+                source,
+              ))),
+              _ => (),
+            }
           }
-        }
-        if let Some(name) = name {
-          let name = receiver.map_or(
-            name,
-            |receiver_name| f"{receiver_name}.{name}",
-          )
-          if !declarations.contains(name) {
-            declarations = declarations.append(name)
+          if let Some(name) = name {
+            let name = receiver.map_or(
+              name,
+              |receiver_name| f"{receiver_name}.{name}",
+            )
+            if declaration_names.get(name).is_none() {
+              declaration_names[name] = true
+              declarations = declarations.append(name)
+            }
+            if let Some(declaration) = declaration {
+              callers[declaration.Id()] = name
+            }
           }
-        }
-      })
+        },
+      )
     }
 
-    let mut calls: Slice<treesitter.ExtractedCall> = Slice.new()
-    let mut seen: Slice<string> = Slice.new()
-    if let Ok(query) = treesitter.compile(language, calls_query()) {
-      defer query.Close()
-      treesitter.for_each_match(query, tree.RootNode(), source, |group| {
-        for hit in group {
-          if hit.name != "callee" { continue }
-          let mut node = hit.node
-          let callee = node.Utf8Text(source)
-          let kind = if node.Kind() == "identifier" && declarations.contains(
-            callee,
-          ) {
-            "local"
-          } else {
-            "unresolved"
+    let mut calls = Slice.new()
+    let mut seen = Map.new()
+    if let Some(query) = self.calls_query {
+      treesitter.for_each_match_with_cursor(
+        self.cursor,
+        query,
+        tree.RootNode(),
+        source,
+        |group| {
+          for hit in group {
+            if hit.name != "callee" { continue }
+            let mut node = hit.node
+            let callee = node.Utf8Text(source)
+            let kind = if node.Kind() == "identifier" && declaration_names
+              .get(callee)
+              .is_some() {
+              "local"
+            } else {
+              "unresolved"
+            }
+            let caller = caller_of(node, source, callers)
+            let key = f"{caller}|{kind}|{callee}"
+            if seen.get(key).is_some() { continue }
+            seen[key] = true
+            calls = calls.append(
+              treesitter.ExtractedCall { caller, callee, kind },
+            )
           }
-          let caller = caller_of(node, source)
-          let key = f"{caller}|{kind}|{callee}"
-          if seen.contains(key) { continue }
-          seen = seen.append(key)
-          calls = calls.append(
-            treesitter.ExtractedCall { caller, callee, kind },
-          )
-        }
-      })
+        },
+      )
     }
     treesitter.ExtractedFile { path, declarations, calls, imports: Slice.new() }
+  }
+
+  pub fn close(self) {
+    if let Some(query) = self.declarations_query { query.Close() }
+    if let Some(query) = self.calls_query { query.Close() }
+    self.cursor.Close()
+    self.parser.Close()
   }
 }
 
@@ -106,16 +172,34 @@ fn calls_query() -> string {
   "(call_expression function: (_) @callee)"
 }
 
-fn caller_of(start: ts.Node, source: Slice<byte>) -> string {
+fn caller_of(
+  start: ts.Node,
+  source: Slice<byte>,
+  mut callers: Map<uintptr, string>,
+) -> string {
+  let Some(declaration) = declaration_of(start) else {
+    return "<global>"
+  }
+  let key = declaration.Id()
+  if let Some(caller) = callers.get(key) { return caller }
+  let caller = match declaration.Kind() {
+    "function_declaration" => fn_name(declaration, source),
+    "method_declaration" => method_identity(declaration, source),
+    _ => "<global>",
+  }
+  callers[key] = caller
+  caller
+}
+
+fn declaration_of(start: ts.Node) -> Option<Ref<ts.Node>> {
   let mut node = start
   let mut current = node.Parent()
   loop {
     let Some(parent) = current else {
-      return "<global>"
+      return None
     }
     match parent.Kind() {
-      "function_declaration" => return fn_name(parent, source),
-      "method_declaration" => return method_identity(parent, source),
+      "function_declaration" | "method_declaration" => return Some(parent),
       _ => current = parent.Parent(),
     }
   }

@@ -60,8 +60,6 @@ func Foo() {
 
 func Bar() {}
 "
-  let dq = "(function_declaration name: (identifier) @fn.name)"
-  let cq = "(call_expression function: (_) @callee)"
   let graph = analyze(source.bytes())
   assert has_decl(graph.decls, "Foo")
   assert has_decl(graph.decls, "Bar")
@@ -80,8 +78,6 @@ func Foo() {
   fmt.Println(\"hi\")
 }
 "
-  let dq = "(function_declaration name: (identifier) @fn.name)"
-  let cq = "(call_expression function: (_) @callee)"
   let graph = analyze(source.bytes())
   assert graph.edges.length() == 1
   assert graph.edges[0].caller.name == "Foo"
@@ -140,15 +136,6 @@ func Use() {
   c.Reset()
 }
 "
-  let dq = "[
-  (function_declaration name: (identifier) @fn.name) @fn.decl
-  (method_declaration
-    receiver: (parameter_list
-      (parameter_declaration
-        type: (_) @method.receiver))
-    name: (field_identifier) @method.name) @method.decl
-]"
-  let cq = "(call_expression function: (_) @callee)"
   let graph = analyze(source.bytes())
   assert has_decl(graph.decls, "Counter.Inc")
   assert has_decl(graph.decls, "Counter.Reset")
@@ -166,8 +153,6 @@ func Foo() {
 
 func Bar() {}
 "
-  let dq = "(function_declaration name: (identifier) @fn.name)"
-  let cq = "(call_expression function: (_) @callee)"
   let graph = analyze(source.bytes())
   assert graph.edges.length() == 1
   assert graph.edges[0].caller.name == "Foo"
@@ -182,8 +167,6 @@ func Foo() { Bar() }
 
 func Bar() {}
 "
-  let dq = "(function_declaration name: (identifier) @fn.name)"
-  let cq = "(call_expression function: (_) @callee)"
   let graph = analyze(source.bytes())
   let out = render_graph(graph)
   let lines = out.split("\n")
@@ -194,8 +177,6 @@ func Bar() {}
 
 #[test]
 fn diff_reports_added_and_removed_edges() {
-  let dq = "(function_declaration name: (identifier) @fn.name)"
-  let cq = "(call_expression function: (_) @callee)"
   let a = analyze("package x\nfunc Foo() { fmt.Println() }\n".bytes())
   let b = analyze("package x\nfunc Foo() { Bar() }\nfunc Bar() {}\n".bytes())
   let out = diff_edges(a, b)

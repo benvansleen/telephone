@@ -4,6 +4,11 @@ import "callgraph"
 import "source"
 import "treesitter"
 
+struct ResolutionContext {
+  package: string,
+  imports: Map<string, treesitter.ExtractedImport>,
+}
+
 pub fn analyze_dir(root: string) -> Result<callgraph.Graph, error> {
   analyze_files(source.files(root)?)
 }
@@ -39,8 +44,9 @@ pub fn resolve(files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
 
   let mut edges: Slice<callgraph.Edge> = Slice.new()
   for file in files {
+    let context = resolution_context(file)
     for call in file.calls {
-      let callee = resolve_call(call, file, functions, methods)
+      let callee = resolve_call(call, context, functions, methods)
       let kind = match callee.location {
         callgraph.SymbolLocation.External => "external",
         callgraph.SymbolLocation.File { .. } => "local",
@@ -59,14 +65,13 @@ pub fn resolve(files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
 
 fn resolve_call(
   call: treesitter.ExtractedCall,
-  file: treesitter.ExtractedFile,
+  context: ResolutionContext,
   functions: Map<string, callgraph.Symbol>,
   methods: Map<string, Option<callgraph.Symbol>>,
 ) -> callgraph.Symbol {
-  let package = package_of(file.path)
   if !call.callee.contains(".") {
     return functions
-      .get(f"{package}.{call.callee}")
+      .get(f"{context.package}.{call.callee}")
       .unwrap_or_else(|| {
         callgraph.Symbol.external(call.callee)
       })
@@ -74,23 +79,33 @@ fn resolve_call(
 
   let parts = call.callee.split(".")
   let first = parts[0]
-  let method = field_name(call.callee)
+  let method = parts[parts.length() - 1]
   if first == "self" && call.caller.contains(".") {
     let receiver = call.caller.split(".")[0]
-    return method_for(package, receiver, method, methods, call.callee)
+    return method_for(context.package, receiver, method, methods, call.callee)
   }
+  if let Some(imported) = context.imports.get(first) {
+    if imported.is_go { return callgraph.Symbol.external(call.callee) }
+    return functions
+      .get(f"{imported.path}.{method}")
+      .unwrap_or_else(|| {
+        callgraph.Symbol.external(call.callee)
+      })
+  }
+  method_for(context.package, first, method, methods, call.callee)
+}
+
+fn resolution_context(file: treesitter.ExtractedFile) -> ResolutionContext {
+  let mut imports: Map<string, treesitter.ExtractedImport> = Map.new()
   for imported in file.imports {
-    if imported.alias == first || (import_name(imported.path) == first &&
-    imported.alias == "") {
-      if imported.is_go { return callgraph.Symbol.external(call.callee) }
-      return functions
-        .get(f"{imported.path}.{method}")
-        .unwrap_or_else(|| {
-          callgraph.Symbol.external(call.callee)
-        })
+    let name = if imported.alias == "" {
+      import_name(imported.path)
+    } else {
+      imported.alias
     }
+    if imports.get(name).is_none() { imports[name] = imported }
   }
-  method_for(package, first, method, methods, call.callee)
+  ResolutionContext { package: package_of(file.path), imports }
 }
 
 fn method_for(

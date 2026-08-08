@@ -7,6 +7,10 @@ impl TestAdapter {
     path.ends_with(".test")
   }
 
+  fn worker(self) -> Worker {
+    self
+  }
+
   fn extract(self, path: string, _source: Slice<byte>) -> ExtractedFile {
     ExtractedFile {
       path,
@@ -15,6 +19,8 @@ impl TestAdapter {
       imports: Slice.new(),
     }
   }
+
+  fn close(self) {}
 }
 
 #[test]

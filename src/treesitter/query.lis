@@ -21,7 +21,12 @@ pub struct ExtractedFile {
 
 pub interface Adapter {
   fn supports(path: string) -> bool
+  fn worker() -> Worker
+}
+
+pub interface Worker {
   fn extract(path: string, source: Slice<byte>) -> ExtractedFile
+  fn close()
 }
 
 pub struct Capture {
@@ -54,6 +59,16 @@ pub fn for_each_match(
   let cursor = ts.NewQueryCursor()
   defer cursor.Close()
 
+  for_each_match_with_cursor(cursor, query, root, text, f)
+}
+
+pub fn for_each_match_with_cursor(
+  cursor: Ref<ts.QueryCursor>,
+  query: Ref<ts.Query>,
+  root: Ref<ts.Node>,
+  text: Slice<byte>,
+  f: fn(Slice<QueryHit>) -> (),
+) {
   let names = query.CaptureNames()
   let mut iter = cursor.Matches(query, root, text)
 

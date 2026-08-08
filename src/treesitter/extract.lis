@@ -25,11 +25,13 @@ pub fn extract_files(adapter: Adapter, files: Slice<source.File>) -> Slice<Extra
   let results = Channel.buffered<ExtractionResult>(supported.length())
   for _ in 0..worker_count {
     task {
+      let worker = adapter.worker()
+      defer worker.close()
       for job in jobs {
         results.send(
           ExtractionResult {
             index: job.index,
-            file: adapter.extract(job.file.path, job.file.content),
+            file: worker.extract(job.file.path, job.file.content),
           },
         )
       }
