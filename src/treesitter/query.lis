@@ -38,15 +38,27 @@ pub struct QueryHit {
 }
 
 pub fn matches(query: Ref<ts.Query>, root: Ref<ts.Node>, text: Slice<byte>) -> Slice<Slice<QueryHit>> {
+  let mut out: Slice<Slice<QueryHit>> = Slice.new()
+  for_each_match(query, root, text, |group| {
+    out = out.append(group)
+  })
+  out
+}
+
+pub fn for_each_match(
+  query: Ref<ts.Query>,
+  root: Ref<ts.Node>,
+  text: Slice<byte>,
+  f: fn(Slice<QueryHit>) -> (),
+) {
   let cursor = ts.NewQueryCursor()
   defer cursor.Close()
 
   let names = query.CaptureNames()
-  let mut iter = cursor.Captures(query, root, text)
+  let mut iter = cursor.Matches(query, root, text)
 
-  let mut out: Slice<Slice<QueryHit>> = Slice.new()
   loop {
-    let (Some(captured), _) = iter.Next() else {
+    let Some(captured) = iter.Next() else {
       break
     }
     let mut group: Slice<QueryHit> = Slice.new()
@@ -55,9 +67,8 @@ pub fn matches(query: Ref<ts.Query>, root: Ref<ts.Node>, text: Slice<byte>) -> S
         QueryHit { name: names[capture.Index as int], node: capture.Node },
       )
     }
-    out = out.append(group)
+    f(group)
   }
-  out
 }
 
 pub fn compile(language: Ref<ts.Language>, source: string) -> Result<Ref<ts.Query>, string> {

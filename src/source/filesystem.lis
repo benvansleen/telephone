@@ -11,6 +11,10 @@ pub fn files(root: string) -> Result<Slice<File>, error> {
   collect(root, root)
 }
 
+pub fn supported(path: string) -> bool {
+  path.ends_with(".go") || path.ends_with(".lis")
+}
+
 fn collect(root: string, dir: string) -> Result<Slice<File>, error> {
   let entries = match os.ReadDir(dir) {
     Partial.Ok(entries) | Partial.Both(entries, _) => entries,
@@ -25,7 +29,7 @@ fn collect(root: string, dir: string) -> Result<Slice<File>, error> {
       for file in collect(root, path)? {
         out = out.append(file)
       }
-    } else if !name.starts_with(".") {
+    } else if !name.starts_with(".") && supported(name) {
       let Ok(content) = os.ReadFile(path) else {
         continue
       }

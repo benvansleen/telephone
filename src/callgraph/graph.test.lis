@@ -1,0 +1,23 @@
+#[test]
+fn sequences_identical_values_as_context() {
+  let result = sequence(["first", "second"], ["first", "second"])
+
+  assert result.length() == 2
+  assert result[0].kind == SequenceKind.Context
+  assert result[0].value == "first"
+  assert result[1].kind == SequenceKind.Context
+  assert result[1].value == "second"
+}
+
+#[test]
+fn sequences_changes_between_common_ranges() {
+  let result = sequence(["prefix", "old", "suffix"], ["prefix", "new", "suffix"])
+
+  assert result.length() == 4
+  assert result[0].kind == SequenceKind.Context
+  assert result[1].kind == SequenceKind.Removed
+  assert result[1].value == "old"
+  assert result[2].kind == SequenceKind.Added
+  assert result[2].value == "new"
+  assert result[3].kind == SequenceKind.Context
+}

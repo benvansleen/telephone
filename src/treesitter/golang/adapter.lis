@@ -28,7 +28,7 @@ impl Go {
     let mut declarations: Slice<string> = Slice.new()
     if let Ok(query) = treesitter.compile(language, declarations_query()) {
       defer query.Close()
-      for group in treesitter.matches(query, tree.RootNode(), source) {
+      treesitter.for_each_match(query, tree.RootNode(), source, |group| {
         let mut name: Option<string> = None
         let mut receiver: Option<string> = None
         for hit in group {
@@ -41,24 +41,23 @@ impl Go {
             _ => (),
           }
         }
-        let Some(name) = name else {
-          continue
+        if let Some(name) = name {
+          let name = receiver.map_or(
+            name,
+            |receiver_name| f"{receiver_name}.{name}",
+          )
+          if !declarations.contains(name) {
+            declarations = declarations.append(name)
+          }
         }
-        let name = receiver.map_or(
-          name,
-          |receiver_name| f"{receiver_name}.{name}",
-        )
-        if !declarations.contains(name) {
-          declarations = declarations.append(name)
-        }
-      }
+      })
     }
 
     let mut calls: Slice<treesitter.ExtractedCall> = Slice.new()
     let mut seen: Slice<string> = Slice.new()
     if let Ok(query) = treesitter.compile(language, calls_query()) {
       defer query.Close()
-      for group in treesitter.matches(query, tree.RootNode(), source) {
+      treesitter.for_each_match(query, tree.RootNode(), source, |group| {
         for hit in group {
           if hit.name != "callee" { continue }
           let mut node = hit.node
@@ -78,7 +77,7 @@ impl Go {
             treesitter.ExtractedCall { caller, callee, kind },
           )
         }
-      }
+      })
     }
     treesitter.ExtractedFile { path, declarations, calls, imports: Slice.new() }
   }

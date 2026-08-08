@@ -231,6 +231,36 @@ fn format_callee(callee: Symbol, file: string) -> string {
 }
 
 fn sequence(old: Slice<string>, new: Slice<string>) -> Slice<SequenceItem> {
+  if old.equals(new) {
+    return old.map(|value| SequenceItem { kind: SequenceKind.Context, value })
+  }
+
+  let mut prefix = 0
+  while prefix < old.length() && prefix < new.length() && old[prefix] == new[prefix] {
+    prefix += 1
+  }
+  let mut suffix = 0
+  while suffix < old.length() - prefix && suffix < new.length() - prefix && old[old.length() -
+  suffix -
+  1] == new[new.length() - suffix - 1] {
+    suffix += 1
+  }
+
+  let mut out = old[..prefix].map(|value| SequenceItem {
+    kind: SequenceKind.Context,
+    value,
+  })
+  out = out.append(sequence_changed(
+    old[prefix..old.length() - suffix],
+    new[prefix..new.length() - suffix],
+  )...)
+  for value in old[old.length() - suffix..old.length()] {
+    out = out.append(SequenceItem { kind: SequenceKind.Context, value })
+  }
+  out
+}
+
+fn sequence_changed(old: Slice<string>, new: Slice<string>) -> Slice<SequenceItem> {
   // Build an LCS table from the end so shared declarations/calls become stable
   // anchors. At a tie, prefer removal, producing conventional `- old` then
   // `+ new` replacement groups.

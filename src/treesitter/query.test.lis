@@ -36,6 +36,31 @@ fn captures_named_nodes() {
 }
 
 #[test]
+fn groups_each_query_match_once() {
+  let source = "package main
+type Worker struct {}
+func (worker *Worker) Run() {}"
+  let assert Some(tree) = parse_source(source)
+  defer tree.Close()
+  let Ok(query) = compile(
+    tree.Language(),
+    "(method_declaration
+  receiver: (parameter_list
+    (parameter_declaration type: (_) @receiver))
+  name: (field_identifier) @name)",
+  ) else {
+    assert false
+    return
+  }
+  defer query.Close()
+
+  let results = matches(query, tree.RootNode(), source.bytes())
+
+  assert results.length() == 1
+  assert results[0].length() == 2
+}
+
+#[test]
 fn reports_compile_errors() {
   let assert Some(tree) = parse_source("package foo")
   defer tree.Close()

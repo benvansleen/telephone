@@ -15,6 +15,7 @@ pub fn commit(root: string, revision: string) -> Result<Snapshot, error> {
 
   let mut files: Slice<File> = Slice.new()
   iterator.ForEach(|file| {
+    if !supported(file.Name) { return Ok(()) }
     files = files.append(
       File { path: file.Name, content: file.Contents()?.bytes() },
     )
@@ -27,11 +28,15 @@ pub fn worktree(root: string) -> Result<Snapshot, error> {
   let repository = git.PlainOpen(root)?
   let tree = repository.Worktree()?
   let status = tree.Status()?
-  let head = commit(root, "HEAD")?
+  let hash = repository.ResolveRevision("HEAD" as plumbing.Revision)?
+  let head = repository.CommitObject(hash.*)?
+  let iterator = head.Files()?
+  defer iterator.Close()
   let mut tracked_paths: Map<string, bool> = Map.new()
-  for file in head.files {
-    tracked_paths[file.path] = true
-  }
+  iterator.ForEach(|file| {
+    if supported(file.Name) { tracked_paths[file.Name] = true }
+    Ok(())
+  })?
   let disk_files = files(root)?
   let mut tracked: Slice<File> = Slice.new()
   for file in disk_files {
