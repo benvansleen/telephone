@@ -1,0 +1,6 @@
+.direnv/
+result
+
+/target/*
+!/target/go.mod
+!/target/go.sum
