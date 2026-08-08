@@ -342,6 +342,22 @@ func worker() {
 }
 
 #[test]
+fn render_tree_indents_fluent_call_continuations() {
+  let graph = callgraph.Graph {
+    decls: [callgraph.Symbol.local("a.go", "Run")],
+    edges: [
+      callgraph.Edge {
+        caller: callgraph.Symbol.local("a.go", "Run"),
+        callee: callgraph.Symbol.external("symbols\n.find"),
+        kind: "external",
+      },
+    ],
+  }
+  assert graph.render_tree() ==
+  "a.go:\n  Run\n    - symbols\n        .find (external)"
+}
+
+#[test]
 fn diff_trees_reports_added_removed_fns_and_calls() {
   let dir_a = os.MkdirTemp("", "callgraph-*").unwrap_or("/tmp/callgraph")
   write_proj(dir_a, [
@@ -403,9 +419,9 @@ func stableWork() {}
   let _ = os.RemoveAll(dir_b)
   let out = ga.diff_trees(gb)
   assert out ==
-  "a.go:\n  Boot\n      stableWork (b.go)\n    + newWork (b.go)\n    - oldWork (b.go)\nb.go:\n  + newWork\n      stableWork\n  - oldWork\n      stableWork"
+  "a.go:\n  Boot\n      stableWork (b.go)\n    - oldWork (b.go)\n    + newWork (b.go)\nb.go:\n  - oldWork\n      stableWork\n  + newWork\n      stableWork"
   assert ga.diff_trees_ansi(gb) ==
-  "\x1b[1;36ma.go:\x1b[0m\n\x1b[1m  Boot\x1b[0m\n      stableWork (\x1b[2;3mb.go)\x1b[0m\n\x1b[38;5;114;48;2;25;43;34m    + newWork (\x1b[2;3;38;5;114;48;2;25;43;34mb.go)\x1b[0m\n\x1b[38;5;210;48;2;54;29;32m    - oldWork (\x1b[2;3;38;5;210;48;2;54;29;32mb.go)\x1b[0m\n\x1b[1;36mb.go:\x1b[0m\n\x1b[38;5;114;48;2;25;43;34m  + newWork\x1b[0m\n      stableWork\n\x1b[38;5;210;48;2;54;29;32m  - oldWork\x1b[0m\n      stableWork"
+  "\x1b[1;36ma.go:\x1b[0m\n\x1b[1m  Boot\x1b[0m\n      stableWork \x1b[2;3m(b.go)\x1b[0m\n\x1b[38;5;210;48;2;54;29;32m    - oldWork (\x1b[2;3;38;5;210;48;2;54;29;32mb.go)\x1b[0m\n\x1b[38;5;114;48;2;25;43;34m    + newWork (\x1b[2;3;38;5;114;48;2;25;43;34mb.go)\x1b[0m\n\x1b[1;36mb.go:\x1b[0m\n\x1b[38;5;210;48;2;54;29;32m  - oldWork\x1b[0m\n      stableWork\n\x1b[38;5;114;48;2;25;43;34m  + newWork\x1b[0m\n      stableWork"
 }
 
 #[test]
@@ -427,12 +443,12 @@ fn commit_fixture_reports_cross_file_call_changes() {
   + recordAccess
 auth.go:
   authenticate
-    + verifyToken (token.go)
     - legacySession (session.go)
+    + verifyToken (token.go)
 dashboard.go:
   renderDashboard
-    + recordAccess (audit.go)
     - logAudit (audit.go)
+    + recordAccess (audit.go)
 preferences.go:
   + hydratePreferences
 profile.go:

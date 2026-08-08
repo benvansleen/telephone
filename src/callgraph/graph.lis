@@ -28,6 +28,14 @@ pub struct Graph {
   pub edges: Slice<Edge>,
 }
 
+enum SequenceKind {
+  Context,
+  Added,
+  Removed,
+}
+
+struct SequenceItem { kind: SequenceKind, value: string }
+
 fn has_symbol(symbols: Slice<Symbol>, wanted: Symbol) -> bool {
   symbols.find(|symbol| symbol.equals(wanted)).is_some()
 }
@@ -73,60 +81,33 @@ impl Graph {
       let mut fn_lines: Slice<string> = Slice.new()
       let a_names = a_files.get(file).unwrap_or_else(|| Slice.new())
       let b_names = b_files.get(file).unwrap_or_else(|| Slice.new())
-      let mut names: Slice<string> = Slice.new()
-      for n in a_names {
-        if !names.contains(n) { names = names.append(n) }
-      }
-      for n in b_names {
-        if !names.contains(n) { names = names.append(n) }
-      }
-      slices.Sort(names)
 
-      for name in names {
-        let in_a = a_names.contains(name)
-        let in_b = b_names.contains(name)
-        if !in_b {
-          fn_lines = fn_lines.append(f"  - {name}")
-          let identity = Symbol.local(file, name).to_key()
-          let callees = a_callees.get(identity).unwrap_or_else(|| Slice.new())
-          for callee in callees {
-            fn_lines = fn_lines.append(f"      {callee.display_callee(file)}")
-          }
-        } else if !in_a {
-          fn_lines = fn_lines.append(f"  + {name}")
-          let identity = Symbol.local(file, name).to_key()
-          let callees = b_callees.get(identity).unwrap_or_else(|| Slice.new())
-          for callee in callees {
-            fn_lines = fn_lines.append(f"      {callee.display_callee(file)}")
-          }
-        } else {
-          let identity = Symbol.local(file, name).to_key()
-          let ac = a_callees.get(identity).unwrap_or_else(|| Slice.new())
-          let bc = b_callees.get(identity).unwrap_or_else(|| Slice.new())
-          let changed = ac.find(|callee| !has_symbol(bc, callee)).is_some() ||
-          bc.find(|callee| !has_symbol(ac, callee)).is_some()
-          if changed {
-            fn_lines = fn_lines.append(f"  {name}")
-            for callee in bc {
-              let prefix = if has_symbol(ac, callee) {
-                "      "
-              } else {
-                "    + "
-              }
-              fn_lines = fn_lines.append(
-                f"{prefix}{callee.display_callee(file)}",
-              )
+      // Sequence diffing keeps replacements adjacent to their original source position
+      for item in sequence(a_names, b_names) {
+        match item.kind {
+          SequenceKind.Removed => fn_lines = append_function(
+            fn_lines,
+            "-",
+            file,
+            item.value,
+            a_callees,
+          ),
+          SequenceKind.Added => fn_lines = append_function(
+            fn_lines,
+            "+",
+            file,
+            item.value,
+            b_callees,
+          ),
+          _ => {
+            let identity = Symbol.local(file, item.value).to_key()
+            let ac = a_callees.get(identity).unwrap_or_else(|| Slice.new())
+            let bc = b_callees.get(identity).unwrap_or_else(|| Slice.new())
+            if calls_changed(ac, bc) {
+              fn_lines = fn_lines.append(f"  {item.value}")
+              fn_lines = append_call_diff(fn_lines, file, ac, bc)
             }
-            // Removed calls no longer have a source position in the new function,
-            // so retain their order from the previous version after current calls.
-            for callee in ac {
-              if !has_symbol(bc, callee) {
-                fn_lines = fn_lines.append(
-                  f"    - {callee.display_callee(file)}",
-                )
-              }
-            }
-          }
+          },
         }
       }
 
@@ -193,12 +174,139 @@ impl Graph {
         let identity = Symbol.local(file, name).to_key()
         let list = callees.get(identity).unwrap_or_else(|| Slice.new())
         for c in list {
-          lines = lines.append(f"    - {c.display_callee(file)}")
+          lines = lines.append(f"    - {format_callee(c, file)}")
         }
       }
     }
     strings.Join(lines, "\n")
   }
+}
+
+fn append_function(
+  mut lines: Slice<string>,
+  marker: string,
+  file: string,
+  name: string,
+  callees_by_function: Map<string, Slice<Symbol>>,
+) -> Slice<string> {
+  lines = lines.append(f"  {marker} {name}")
+  let identity = Symbol.local(file, name).to_key()
+  let callees = callees_by_function.get(identity).unwrap_or_else(|| Slice.new())
+  for callee in callees {
+    lines = lines.append(f"      {format_callee(callee, file)}")
+  }
+  lines
+}
+
+fn append_call_diff(
+  mut lines: Slice<string>,
+  file: string,
+  old: Slice<Symbol>,
+  new: Slice<Symbol>,
+) -> Slice<string> {
+  // Symbols have stable identities but user-facing labels depend on the caller
+  // file, so sequence the identities first and render labels afterward.
+  // TODO: Emit structured diff lines if another output format needs semantics.
+  for item in sequence(symbol_keys(old), symbol_keys(new)) {
+    let callee = match item.kind {
+      SequenceKind.Removed => symbol_by_key(old, item.value),
+      _ => symbol_by_key(new, item.value),
+    }
+    let prefix = match item.kind {
+      SequenceKind.Removed => "    - ",
+      SequenceKind.Added => "    + ",
+      _ => "      ",
+    }
+    lines = lines.append(f"{prefix}{format_callee(callee, file)}")
+  }
+  lines
+}
+
+fn calls_changed(old: Slice<Symbol>, new: Slice<Symbol>) -> bool {
+  old.find(|callee| !has_symbol(new, callee)).is_some() ||
+  new.find(|callee| !has_symbol(old, callee)).is_some()
+}
+
+fn format_callee(callee: Symbol, file: string) -> string {
+  // Tree-sitter preserves line breaks in fluent-call expressions. Continue
+  // selectors beneath their receiver rather than using their source indentation.
+  strings.ReplaceAll(callee.display_callee(file), "\n", "\n        ")
+}
+
+fn symbol_keys(symbols: Slice<Symbol>) -> Slice<string> {
+  let mut keys: Slice<string> = Slice.new()
+  for symbol in symbols {
+    keys = keys.append(symbol.to_key())
+  }
+  keys
+}
+
+fn symbol_by_key(symbols: Slice<Symbol>, key: string) -> Symbol {
+  // TODO: Build a lookup map if profiling shows these small linear scans matter.
+  symbols
+    .find(|symbol| symbol.to_key() == key)
+    .unwrap_or_else(|| Symbol.external(key))
+}
+
+fn sequence(old: Slice<string>, new: Slice<string>) -> Slice<SequenceItem> {
+  // Build an LCS table from the end so shared declarations/calls become stable
+  // anchors. At a tie, prefer removal, producing conventional `- old` then
+  // `+ new` replacement groups.
+  // TODO: Consider a linear-space algorithm or cutoff for generated files.
+  let mut table: Slice<Slice<int>> = Slice.new()
+  for _ in 0..(old.length() + 1) {
+    let mut row: Slice<int> = Slice.new()
+    for _ in 0..(new.length() + 1) {
+      row = row.append(0)
+    }
+    table = table.append(row)
+  }
+
+  for old_offset in 0..old.length() {
+    let i = old.length() - old_offset - 1
+    for new_offset in 0..new.length() {
+      let j = new.length() - new_offset - 1
+      table[i][j] = if old[i] == new[j] {
+        table[i + 1][j + 1] + 1
+      } else if table[i + 1][j] >= table[i][j + 1] {
+        table[i + 1][j]
+      } else {
+        table[i][j + 1]
+      }
+    }
+  }
+
+  let mut out: Slice<SequenceItem> = Slice.new()
+  let mut i = 0
+  let mut j = 0
+  while i < old.length() && j < new.length() {
+    if old[i] == new[j] {
+      out = out.append(
+        SequenceItem { kind: SequenceKind.Context, value: old[i] },
+      )
+      i += 1
+      j += 1
+    } else if table[i + 1][j] >= table[i][j + 1] {
+      out = out.append(
+        SequenceItem { kind: SequenceKind.Removed, value: old[i] },
+      )
+      i += 1
+    } else {
+      out = out.append(SequenceItem { kind: SequenceKind.Added, value: new[j] })
+      j += 1
+    }
+  }
+  for index in i..old.length() {
+    out = out.append(
+      SequenceItem { kind: SequenceKind.Removed, value: old[index] },
+    )
+  }
+  for index in j..new.length() {
+    out = out.append(
+      SequenceItem { kind: SequenceKind.Added, value: new[index] },
+    )
+  }
+  out
 }
 
 fn style_diff_line(line: string) -> string {
@@ -234,7 +342,7 @@ fn style_context(line: string) -> string {
 fn style_neutral(line: string) -> string {
   let parts = line.split(" (")
   if parts.length() == 2 {
-    return f"{parts[0]} ({CONTEXT_LOCATION}{parts[1]}{RESET}"
+    return f"{parts[0]} {CONTEXT_LOCATION}({parts[1]}{RESET}"
   }
   line
 }
