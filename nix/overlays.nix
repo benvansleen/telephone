@@ -28,16 +28,36 @@
 
           (final: _prev: {
             buildLisetteModule =
-              { src, vendorHash }:
+              {
+                src,
+                vendorHash,
+              }:
               let
                 manifest = fromTOML (builtins.readFile "${src}/lisette.toml");
                 go-mod = "${src}/target/go.mod";
                 go-sum = "${src}/target/go.sum";
 
+                allDeps = manifest.dependencies.go or { };
+
+                # Local directory deps (`path = "..."` in lisette.toml). These are not
+                # fetched from the proxy; they resolve via `replace` directives to the
+                # vendored source, so exclude them from the proxy graphs.
+                pathDeps = lib.mapAttrsToList (module: pin: {
+                  inherit module;
+                  inherit (pin) path;
+                }) (lib.filterAttrs (_: pin: builtins.isAttrs pin && pin ? path) allDeps);
+                replaceCmds = lib.concatMapStringsSep "\n" (
+                  d:
+                  let
+                    relative = lib.removePrefix "vendor/" d.path;
+                  in
+                  "go mod edit -replace ${d.module}=./lisette-vendor/${relative}"
+                ) pathDeps;
+
                 initialRequires =
                   let
-                    deps = manifest.dependencies.go or { };
-                    pinVersion = pin: if builtins.isString pin then pin else pin.version;
+                    deps = lib.filterAttrs (_: pin: !(builtins.isAttrs pin && pin ? path)) allDeps;
+                    pinVersion = pin: if builtins.isString pin then pin else (pin.version or "");
                     lines = lib.mapAttrsToList (module: pin: "\t${module} ${pinVersion pin}") deps;
                   in
                   lib.concatStringsSep "\n" (
@@ -47,7 +67,9 @@
                 goModules =
                   final.runCommand "lis-go-modules"
                     {
-                      nativeBuildInputs = [ final.go ];
+                      nativeBuildInputs = [
+                        final.go
+                      ];
                       outputHashMode = "recursive";
                       outputHash = vendorHash;
                     }
@@ -78,6 +100,7 @@
                       cp ${go-mod} deps-final/go.mod
                       ${if builtins.pathExists go-sum then "cp ${go-sum} deps-final/go.sum" else ""}
                       chmod -R u+w deps-final
+                      (cd deps-final && ${replaceCmds})
                       (cd deps-final && go mod download all)
 
                       # lisette fetches its bindgen tool at emit time via
@@ -100,7 +123,10 @@
                 lisProject =
                   final.runCommand "lis-emitted"
                     {
-                      nativeBuildInputs = [ final.go ];
+                      nativeBuildInputs = [
+                        final.go
+                        final.stdenv.cc
+                      ];
                     }
                     /* sh */ ''
                       export HOME="$TMPDIR"
@@ -114,12 +140,15 @@
                       mkdir project
                       cp -r ${src}/src project/src
                       cp ${src}/lisette.toml project/lisette.toml
+                      cp -r ${src}/vendor project/vendor
                       chmod -R u+w project
+                      ls
 
                       cd project
                       ${lib.getExe final.lisette} emit
 
-                      mkdir -p "$out"
+                      mkdir -p "$out/project"
+                      cp -r vendor "$out/project/lisette-vendor"
                       cp -r target/. "$out/project/"
                       rm -rf "$out/project/.lisette"
                     '';
@@ -130,6 +159,7 @@
                 src = "${lisProject}/project";
                 proxyVendor = true;
                 vendorHash = null;
+                subPackages = [ "." ];
                 ldflags = [
                   "-s"
                   "-w"
@@ -141,6 +171,10 @@
                   export GOTOOLCHAIN=local
                   export GOWORK=off
                   export GOFLAGS="-buildvcs=false $GOFLAGS"
+
+                  # Repoint the path-dep replaces (emitted by lisette as absolute paths
+                  # into the emit sandbox) at the vendored source inside this build.
+                  ${replaceCmds}
                 '';
 
                 nativeBuildInputs = [ final.lisette ];

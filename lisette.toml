@@ -1,3 +1,9 @@
 [project]
 name = "telephone"
 version = "0.1.0"
+
+[dependencies.go]
+"github.com/tree-sitter/go-tree-sitter" = "v0.25.0"
+"github.com/mattn/go-pointer" = { version = "v0.0.1", via = ["github.com/tree-sitter/go-tree-sitter"] }
+"github.com/telephone/tsgrammar" = { path = "vendor/tsgrammar" }
+"github.com/telephone/ts-shim" = { path = "vendor/ts-shim" }

@@ -1,0 +1,64 @@
+import "go:github.com/telephone/ts-shim"
+import ts "go:github.com/tree-sitter/go-tree-sitter"
+import tsgo "go:github.com/telephone/tsgrammar"
+
+fn parse_source(content: string) -> Option<Ref<ts.Tree>> {
+  let parser = ts.NewParser()
+  let language = ts.NewLanguage(tsgo.GoLanguage())
+  if let Err(_) = parser.SetLanguage(language) { return None }
+  parser.Parse(content.bytes(), tsshim.NewEmptyTree())
+}
+
+#[test]
+fn escapes_backslashes() {
+  assert escape(r"a\b") == r"a\\b"
+}
+
+#[test]
+fn escapes_quotes() {
+  assert escape("say \"hi\"") == "say \\\"hi\\\""
+}
+
+#[test]
+fn escapes_newlines() {
+  assert escape("line1\nline2") == "line1\\nline2"
+}
+
+#[test]
+fn escapes_tabs() {
+  assert escape("a\tb") == "a\\tb"
+}
+
+#[test]
+fn renders_leaf_with_text() {
+  let assert Some(tree) = parse_source("package foo")
+  defer tree.Close()
+  let out = sexp(tree.RootNode(), "package foo".bytes())
+  assert out.contains("(package_identifier \"foo\")")
+}
+
+#[test]
+fn renders_fields() {
+  let assert Some(tree) = parse_source("func main() {}")
+  defer tree.Close()
+  let out = sexp(tree.RootNode(), "func main() {}".bytes())
+  assert out.contains("name: (identifier \"main\")")
+  assert out.contains("parameters: (parameter_list)")
+}
+
+#[test]
+fn collapses_empty_nodes() {
+  let assert Some(tree) = parse_source("func main() {}")
+  defer tree.Close()
+  let out = sexp(tree.RootNode(), "func main() {}".bytes())
+  assert out.contains("(parameter_list)")
+  assert out.contains("(block)")
+}
+
+#[test]
+fn stacks_closing_parens() {
+  let assert Some(tree) = parse_source("func main() {}")
+  defer tree.Close()
+  let out = sexp(tree.RootNode(), "func main() {}".bytes())
+  assert out.ends_with("body: (block)))")
+}

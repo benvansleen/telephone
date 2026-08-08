@@ -1,0 +1,366 @@
+import "go:os"
+import "go:path/filepath"
+
+#[test]
+fn local_edges_and_dedup() {
+  let source = "package example
+func Foo() {
+  Bar()
+  Bar()
+}
+
+func Bar() {}
+"
+  let dq = "(function_declaration name: (identifier) @fn.name)"
+  let cq = "(call_expression function: (_) @callee)"
+  let graph = analyze(source.bytes(), dq, cq)
+  assert graph.decls.contains("Foo")
+  assert graph.decls.contains("Bar")
+  assert graph.edges.length() == 1
+  assert graph.edges[0].caller == "Foo"
+  assert graph.edges[0].callee == "Bar"
+  assert graph.edges[0].kind == "local"
+}
+
+#[test]
+fn external_calls_are_tagged() {
+  let source = "package example
+import \"fmt\"
+
+func Foo() {
+  fmt.Println(\"hi\")
+}
+"
+  let dq = "(function_declaration name: (identifier) @fn.name)"
+  let cq = "(call_expression function: (_) @callee)"
+  let graph = analyze(source.bytes(), dq, cq)
+  assert graph.edges.length() == 1
+  assert graph.edges[0].caller == "Foo"
+  assert graph.edges[0].callee == "fmt.Println"
+  assert graph.edges[0].kind == "external"
+}
+
+fn has_edge(edges: Slice<Edge>, caller: string, callee: string, kind: string) -> bool {
+  for e in edges {
+    if e.caller == caller && e.callee == callee && e.kind == kind {
+      return true
+    }
+  }
+  false
+}
+
+#[test]
+fn method_calls_resolve_to_receiver_type() {
+  let source = "package example
+
+type Counter struct { n int }
+
+func (c Counter) Inc() {}
+
+func (c *Counter) Reset() {}
+
+func Use() {
+  var c Counter
+  c.Inc()
+  c.Reset()
+}
+"
+  let dq = "[
+  (function_declaration name: (identifier) @fn.name) @fn.decl
+  (method_declaration
+    receiver: (parameter_list
+      (parameter_declaration
+        type: (_) @method.receiver))
+    name: (field_identifier) @method.name) @method.decl
+]"
+  let cq = "(call_expression function: (_) @callee)"
+  let graph = analyze(source.bytes(), dq, cq)
+  assert graph.decls.contains("Counter.Inc")
+  assert graph.decls.contains("Counter.Reset")
+  assert has_edge(graph.edges, "Use", "Counter.Inc", "method")
+  assert has_edge(graph.edges, "Use", "Counter.Reset", "method")
+}
+
+#[test]
+fn calls_inside_anonymous_functions_attribute_to_enclosing_fn() {
+  let source = "package example
+
+func Foo() {
+  task { Bar() }
+}
+
+func Bar() {}
+"
+  let dq = "(function_declaration name: (identifier) @fn.name)"
+  let cq = "(call_expression function: (_) @callee)"
+  let graph = analyze(source.bytes(), dq, cq)
+  assert graph.edges.length() == 1
+  assert graph.edges[0].caller == "Foo"
+  assert graph.edges[0].callee == "Bar"
+}
+
+#[test]
+fn render_produces_sorted_lines() {
+  let source = "package example
+
+func Foo() { Bar() }
+
+func Bar() {}
+"
+  let dq = "(function_declaration name: (identifier) @fn.name)"
+  let cq = "(call_expression function: (_) @callee)"
+  let graph = analyze(source.bytes(), dq, cq)
+  let out = render_graph(graph)
+  let lines = out.split("\n")
+  assert lines[0] == "def Bar"
+  assert lines[1] == "def Foo"
+  assert lines[2] == "edge Foo -> Bar (local)"
+}
+
+#[test]
+fn diff_reports_added_and_removed_edges() {
+  let dq = "(function_declaration name: (identifier) @fn.name)"
+  let cq = "(call_expression function: (_) @callee)"
+  let a = analyze("package x\nfunc Foo() { fmt.Println() }\n".bytes(), dq, cq)
+  let b = analyze(
+    "package x\nfunc Foo() { Bar() }\nfunc Bar() {}\n".bytes(),
+    dq,
+    cq,
+  )
+  let out = diff_edges(a, b)
+  assert out.contains("- edge Foo -> fmt.Println (external)")
+  assert out.contains("+ def Bar")
+  assert out.contains("+ edge Foo -> Bar (local)")
+}
+
+fn std_dq() -> string {
+  "[
+  (function_declaration name: (identifier) @fn.name) @fn.decl
+  (method_declaration
+    receiver: (parameter_list
+      (parameter_declaration
+        type: (_) @method.receiver))
+    name: (field_identifier) @method.name) @method.decl
+]"
+}
+
+fn std_cq() -> string {
+  "(call_expression function: (_) @callee)"
+}
+
+fn write_proj(dir: string, files: Slice<(string, string)>) {
+  for (name, content) in files {
+    let _ = os.WriteFile(filepath.Join(dir, name), content.bytes(), 0o644)
+  }
+}
+
+#[test]
+fn cross_file_local_and_method_resolution() {
+  let dir = os.MkdirTemp("", "callgraph-*").unwrap_or("/tmp/callgraph")
+  write_proj(dir, [
+    (
+      "a.go",
+      "package app
+
+type DB struct{}
+
+func Run() {
+  helper()
+  d := DB{}
+  d.Query()
+}
+",
+    ),
+    (
+      "b.go",
+      "package app
+
+func helper() {}
+
+func (d *DB) Query() {
+  helper()
+}
+",
+    ),
+  ])
+  let Ok(graph) = analyze_dir_with(dir, std_dq(), std_cq()) else {
+    let _ = os.RemoveAll(dir)
+    assert false
+    return
+  }
+  let _ = os.RemoveAll(dir)
+  assert has_edge(graph.edges, "a.go:Run", "b.go:helper", "local")
+  assert has_edge(graph.edges, "a.go:Run", "b.go:DB.Query", "method")
+  assert has_edge(graph.edges, "b.go:DB.Query", "b.go:helper", "local")
+}
+
+#[test]
+fn ambiguous_method_stays_external() {
+  let dir = os.MkdirTemp("", "callgraph-*").unwrap_or("/tmp/callgraph")
+  write_proj(dir, [
+    (
+      "a.go",
+      "package app
+
+func Run() {
+  x.Save()
+}
+",
+    ),
+    (
+      "b.go",
+      "package app
+
+type A struct{}
+type B struct{}
+
+func (a A) Save() {}
+func (b B) Save() {}
+",
+    ),
+  ])
+  let Ok(graph) = analyze_dir_with(dir, std_dq(), std_cq()) else {
+    let _ = os.RemoveAll(dir)
+    assert false
+    return
+  }
+  let _ = os.RemoveAll(dir)
+  assert has_edge(graph.edges, "a.go:Run", "x.Save", "external")
+}
+
+fn test_root() -> string {
+  filepath.Dir(os.Getwd().unwrap_or("."))
+}
+
+#[test]
+fn render_tree_shows_direct_calls_only() {
+  let dir = os.MkdirTemp("", "callgraph-*").unwrap_or("/tmp/callgraph")
+  write_proj(dir, [
+    (
+      "a.go",
+      "package app
+
+func Boot() {
+  worker()
+}
+",
+    ),
+    (
+      "b.go",
+      "package app
+
+func worker() {
+  fmt.Println()
+}
+",
+    ),
+  ])
+  let Ok(graph) = analyze_dir_with(dir, std_dq(), std_cq()) else {
+    let _ = os.RemoveAll(dir)
+    assert false
+    return
+  }
+  let _ = os.RemoveAll(dir)
+  let out = render_tree(graph)
+  assert out ==
+  "a.go:\n  Boot\n    - worker (b.go)\nb.go:\n  worker\n    - fmt.Println (external)"
+}
+
+#[test]
+fn diff_trees_reports_added_removed_fns_and_calls() {
+  let dir_a = os.MkdirTemp("", "callgraph-*").unwrap_or("/tmp/callgraph")
+  write_proj(dir_a, [
+    (
+      "a.go",
+      "package app
+
+func Boot() {
+  oldWork()
+}
+",
+    ),
+    (
+      "b.go",
+      "package app
+
+func oldWork() {}
+",
+    ),
+  ])
+  let dir_b = os.MkdirTemp("", "callgraph-*").unwrap_or("/tmp/callgraph")
+  write_proj(dir_b, [
+    (
+      "a.go",
+      "package app
+
+func Boot() {
+  newWork()
+}
+",
+    ),
+    (
+      "b.go",
+      "package app
+
+func newWork() {}
+",
+    ),
+  ])
+  let Ok(ga) = analyze_dir_with(dir_a, std_dq(), std_cq()) else {
+    let _ = os.RemoveAll(dir_a)
+    let _ = os.RemoveAll(dir_b)
+    assert false
+    return
+  }
+  let Ok(gb) = analyze_dir_with(dir_b, std_dq(), std_cq()) else {
+    let _ = os.RemoveAll(dir_a)
+    let _ = os.RemoveAll(dir_b)
+    assert false
+    return
+  }
+  let _ = os.RemoveAll(dir_a)
+  let _ = os.RemoveAll(dir_b)
+  let out = diff_trees(ga, gb)
+  assert out ==
+  "a.go:\n  Boot\n    + newWork (b.go)\n    - oldWork (b.go)\nb.go:\n  + newWork\n  - oldWork"
+}
+
+#[test]
+fn testdata_project_graph() {
+  let root = test_root()
+  let dq = os
+    .ReadFile(filepath.Join(root, "queries", "decls.scm"))
+    .ok()
+    .unwrap_or_else(|| Slice.new())
+  let cq = os
+    .ReadFile(filepath.Join(root, "queries", "calls.scm"))
+    .ok()
+    .unwrap_or_else(|| Slice.new())
+  let case = filepath.Join(root, "testdata")
+  match analyze_dir_with(case, dq as string, cq as string) {
+    Ok(graph) => {
+      assert has_edge(
+        graph.edges,
+        "app/app.go:Boot",
+        "app/workers.go:worker",
+        "local",
+      )
+      assert has_edge(
+        graph.edges,
+        "app/app.go:Boot",
+        "app/app.go:Server.Start",
+        "method",
+      )
+      assert has_edge(
+        graph.edges,
+        "app/handlers.go:Handler.Run",
+        "app/store.go:DB.Query",
+        "method",
+      )
+      assert has_edge(graph.edges, "main.go:main", "app.Boot", "external")
+    },
+    Err(err) => {
+      assert f"analyze_dir failed with: {err.Error()}" == "ok"
+    },
+  }
+}

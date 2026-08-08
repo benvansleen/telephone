@@ -1,0 +1,45 @@
+import "go:strings"
+import ts "go:github.com/tree-sitter/go-tree-sitter"
+
+fn sexp(node: Ref<ts.Node>, source: Slice<byte>) -> string {
+  render(node, source, 0)
+}
+
+fn render(node: Ref<ts.Node>, source: Slice<byte>, depth: int) -> string {
+  let kind = node.Kind()
+  let count = node.ChildCount()
+
+  if count == 0 {
+    if node.IsNamed() { return f"({kind} \"{escape(node.Utf8Text(source))}\")" }
+    return f"({kind})"
+  }
+
+  let mut body = f"({kind}"
+  let mut rendered_any = false
+  for i in 0..count as int {
+    if let Some(child) = node.Child(i as uint) {
+      if child.IsNamed() {
+        rendered_any = true
+        let indent = strings.Repeat("  ", depth + 1)
+        let child_sexp = render(child, source, depth + 1)
+        let field = node.FieldNameForChild(i as uint32)
+        if field.length() > 0 {
+          body = f"{body}\n{indent}{field}: {child_sexp}"
+        } else {
+          body = f"{body}\n{indent}{child_sexp}"
+        }
+      }
+    }
+  }
+
+  if rendered_any { f"{body})" } else { f"({kind})" }
+}
+
+fn escape(text: string) -> string {
+  let mut out = text
+  out = strings.ReplaceAll(out, "\\", "\\\\")
+  out = strings.ReplaceAll(out, "\"", "\\\"")
+  out = strings.ReplaceAll(out, "\n", "\\n")
+  out = strings.ReplaceAll(out, "\t", "\\t")
+  out
+}

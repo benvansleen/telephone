@@ -19,8 +19,15 @@
       settings = {
         formatter = {
           lisfmt = {
-            command = lib.getExe pkgs.lisette;
-            options = [ "format" ];
+            command = lib.getExe pkgs.bash;
+            options = [
+              "-euc"
+              /* sh */ ''
+                for file in "$@"; do
+                  ${lib.getExe pkgs.lisette} format $file
+                done
+              ''
+            ];
             includes = [ "**/*.lis" ];
           };
         };

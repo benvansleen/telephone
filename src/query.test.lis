@@ -1,0 +1,47 @@
+#[test]
+fn compiles_a_query() {
+  let assert Some(tree) = parse_source("package foo")
+  defer tree.Close()
+  let Ok(query) = compile(
+    tree.Language(),
+    "(package_clause (package_identifier) @pkg)",
+  ) else {
+    assert false
+    return
+  }
+  defer query.Close()
+  let results = captures(query, tree.RootNode(), "package foo".bytes())
+  assert results.length() == 1
+  assert results[0].name == "pkg"
+  assert results[0].text == "foo"
+}
+
+#[test]
+fn captures_named_nodes() {
+  let assert Some(tree) = parse_source("func Foo() {}")
+  defer tree.Close()
+  let Ok(query) = compile(
+    tree.Language(),
+    "(function_declaration name: (identifier) @name)",
+  ) else {
+    assert false
+    return
+  }
+  defer query.Close()
+  let results = captures(query, tree.RootNode(), "func Foo() {}".bytes())
+  assert results.length() == 1
+  assert results[0].name == "name"
+  assert results[0].kind == "identifier"
+  assert results[0].text == "Foo"
+}
+
+#[test]
+fn reports_compile_errors() {
+  let assert Some(tree) = parse_source("package foo")
+  defer tree.Close()
+  let Err(message) = compile(tree.Language(), "(unclosed") else {
+    assert false
+    return
+  }
+  assert message.length() > 0
+}

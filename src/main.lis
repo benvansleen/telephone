@@ -1,5 +1,83 @@
 import "go:fmt"
+import "go:github.com/telephone/ts-shim"
+import "go:os"
+import ts "go:github.com/tree-sitter/go-tree-sitter"
+import tsgo "go:github.com/telephone/tsgrammar"
+
+struct Go {}
+
+impl Go {
+  fn new() -> Result<Ref<ts.Parser>, error> {
+    let parser = ts.NewParser()
+
+    let language = ts.NewLanguage(tsgo.GoLanguage())
+    parser.SetLanguage(language)?
+    Ok(parser)
+  }
+}
 
 fn main() {
-  fmt.Println("Hello world!")
+  let parser = Go
+    .new()
+    .unwrap_or_else(|err| {
+      fmt.Println(f"creating parser: {err.Error()}")
+      os.Exit(1)
+    })
+  defer parser.Close()
+
+  let content = os
+    .ReadFile("./testdata/main.go")
+    .unwrap_or_else(|err| {
+      fmt.Println(f"opening file: {err.Error()}")
+      os.Exit(1)
+    })
+
+  if let Some(tree) = parser.Parse(content, tsshim.NewEmptyTree()) {
+    defer tree.Close()
+    fmt.Println(sexp(tree.RootNode(), content))
+
+    let query_source = os
+      .ReadFile("./queries/go.scm")
+      .unwrap_or_else(|err| {
+        fmt.Println(f"opening query: {err.Error()}")
+        os.Exit(1)
+      })
+
+    match compile(tree.Language(), query_source as string) {
+      Ok(query) => {
+        defer query.Close()
+        let results = captures(query, tree.RootNode(), content)
+        fmt.Println()
+        for c in results {
+          fmt.Println(f"{c.name}: {c.kind} [{c.start}..{c.end}) {c.text}")
+        }
+      },
+      Err(message) => fmt.Println(f"query error: {message}"),
+    }
+  }
+
+  let root = if os.Args.length() > 1 { os.Args[1] } else { "./testdata" }
+  let other = if os.Args.length() > 2 { os.Args[2] } else { "" }
+  if other.length() > 0 {
+    match analyze_dir(root) {
+      Ok(a) => match analyze_dir(other) {
+        Ok(b) => {
+          fmt.Println()
+          fmt.Println(f"Call graph diff {root} -> {other}")
+          fmt.Println(diff_trees(a, b))
+        },
+        Err(err) => fmt.Println(f"callgraph: {err.Error()}"),
+      },
+      Err(err) => fmt.Println(f"callgraph: {err.Error()}"),
+    }
+    return
+  }
+  match analyze_dir(root) {
+    Ok(graph) => {
+      fmt.Println()
+      fmt.Println(f"Call graph for {root}")
+      fmt.Println(render_tree(graph))
+    },
+    Err(err) => fmt.Println(f"callgraph: {err.Error()}"),
+  }
 }
