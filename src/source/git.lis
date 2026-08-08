@@ -1,0 +1,47 @@
+import "go:github.com/go-git/go-git/v5"
+import "go:github.com/go-git/go-git/v5/plumbing"
+
+pub struct Snapshot {
+  pub label: string,
+  pub files: Slice<File>,
+}
+
+pub fn commit(root: string, revision: string) -> Result<Snapshot, error> {
+  let repository = git.PlainOpen(root)?
+  let hash = repository.ResolveRevision(revision as plumbing.Revision)?
+  let commit = repository.CommitObject(hash.*)?
+  let iterator = commit.Files()?
+  defer iterator.Close()
+
+  let mut files: Slice<File> = Slice.new()
+  iterator.ForEach(|file| {
+    files = files.append(
+      File { path: file.Name, content: file.Contents()?.bytes() },
+    )
+    Ok(())
+  })?
+  Ok(Snapshot { label: revision, files })
+}
+
+pub fn worktree(root: string) -> Result<Snapshot, error> {
+  let repository = git.PlainOpen(root)?
+  let tree = repository.Worktree()?
+  let status = tree.Status()?
+  let head = commit(root, "HEAD")?
+  let mut tracked_paths: Map<string, bool> = Map.new()
+  for file in head.files {
+    tracked_paths[file.path] = true
+  }
+  let disk_files = files(root)?
+  let mut tracked: Slice<File> = Slice.new()
+  for file in disk_files {
+    if tracked_paths.get(file.path).unwrap_or(false) {
+      tracked = tracked.append(file)
+      continue
+    }
+    if let Some(state) = status.0.get(file.path) {
+      if state.Staging == git.Added { tracked = tracked.append(file) }
+    }
+  }
+  Ok(Snapshot { label: "worktree", files: tracked })
+}

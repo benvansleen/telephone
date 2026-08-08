@@ -21,14 +21,15 @@ fn collect(root: string, dir: string) -> Result<Slice<File>, error> {
     let name = entry.Name()
     let path = filepath.Join(dir, name)
     if entry.IsDir() {
-      if name == ".git" { continue }
+      if name.starts_with(".") { continue }
       for file in collect(root, path)? {
         out = out.append(file)
       }
     } else if !name.starts_with(".") {
-      out = out.append(
-        File { path: relative_path(root, path), content: os.ReadFile(path)? },
-      )
+      let Ok(content) = os.ReadFile(path) else {
+        continue
+      }
+      out = out.append(File { path: relative_path(root, path), content })
     }
   }
   Ok(out)

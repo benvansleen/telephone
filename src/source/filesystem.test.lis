@@ -1,3 +1,6 @@
+import "go:os"
+import "go:path/filepath"
+
 #[test]
 fn relative_path_accepts_a_trailing_root_separator() {
   assert relative_path(
@@ -5,4 +8,25 @@ fn relative_path_accepts_a_trailing_root_separator() {
     "testdata/commits/before/audit.go",
   ) ==
   "audit.go"
+}
+
+#[test]
+fn commit_snapshot_reads_head_tree() {
+  let root = filepath.Dir(filepath.Dir(os.Getwd().unwrap_or(".")))
+  let Ok(snapshot) = commit(root, "HEAD") else {
+    assert false
+    return
+  }
+  assert snapshot.label == "HEAD"
+  assert snapshot.files.length() > 0
+}
+
+#[test]
+fn worktree_snapshot_includes_head_files() {
+  let root = filepath.Dir(filepath.Dir(os.Getwd().unwrap_or(".")))
+  let Ok(snapshot) = worktree(root) else {
+    assert false
+    return
+  }
+  assert snapshot.files.any(|file| file.path == "src/main.lis")
 }

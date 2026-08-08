@@ -1,31 +1,95 @@
 import "go:fmt"
 import "go:os"
 
+import "source"
 import "treesitter/golang"
 
 fn main() {
-  let root = if os.Args.length() > 1 { os.Args[1] } else { "./testdata" }
-  let other = if os.Args.length() > 2 { os.Args[2] } else { "" }
-  if other.length() > 0 {
-    match golang.analyze_dir(root) {
-      Ok(a) => match golang.analyze_dir(other) {
-        Ok(b) => {
-          fmt.Println()
-          fmt.Println(f"Call graph diff {root} -> {other}")
-          fmt.Println(a.diff_trees(b))
-        },
-        Err(err) => fmt.Println(f"callgraph: {err.Error()}"),
-      },
-      Err(err) => fmt.Println(f"callgraph: {err.Error()}"),
+  let mut repo = "."
+  let mut index = 1
+  if os.Args.length() > 1 && os.Args[1] == "--repo" {
+    if os.Args.length() < 3 {
+      usage()
+      return
     }
+    repo = os.Args[2]
+    index = 3
+  }
+
+  let count = os.Args.length() - index
+  if count > 0 && os.Args[index] == "--paths" {
+    if count != 3 {
+      usage()
+      return
+    }
+    compare_paths(os.Args[index + 1], os.Args[index + 2])
     return
   }
-  match golang.analyze_dir(root) {
-    Ok(graph) => {
-      fmt.Println()
-      fmt.Println(f"Call graph for {root}")
-      fmt.Println(graph.render_tree())
-    },
-    Err(err) => fmt.Println(f"callgraph: {err.Error()}"),
+
+  match count {
+    0 => compare_git(repo, "HEAD", None),
+    1 => compare_git(repo, os.Args[index], None),
+    2 => compare_git(repo, os.Args[index], Some(os.Args[index + 1])),
+    _ => usage(),
   }
+}
+
+fn compare_git(repo: string, old_revision: string, new_revision: Option<string>) {
+  let old = source.commit(repo, old_revision)
+  let new = match new_revision {
+    Some(revision) => source.commit(repo, revision),
+    None => source.worktree(repo),
+  }
+  match old {
+    Ok(old) => match new {
+      Ok(new) => print_diff(old, new),
+      Err(err) => {
+        let _ = fmt.Println(f"telephone: {err.Error()}")
+      },
+    },
+    Err(err) => {
+      let _ = fmt.Println(f"telephone: {err.Error()}")
+    },
+  }
+}
+
+fn compare_paths(old_path: string, new_path: string) {
+  match golang.analyze_dir(old_path) {
+    Ok(old) => match golang.analyze_dir(new_path) {
+      Ok(new) => {
+        fmt.Println()
+        fmt.Println(f"Call graph diff {old_path} -> {new_path}")
+        fmt.Println(old.diff_trees(new))
+      },
+      Err(err) => {
+        fmt.Println(f"telephone: {err.Error()}")
+      },
+    },
+    Err(err) => {
+      fmt.Println(f"telephone: {err.Error()}")
+    },
+  }
+}
+
+fn print_diff(old: source.Snapshot, new: source.Snapshot) {
+  match golang.analyze_files(old.files) {
+    Ok(old_graph) => match golang.analyze_files(new.files) {
+      Ok(new_graph) => {
+        fmt.Println()
+        fmt.Println(f"Call graph diff {old.label} -> {new.label}")
+        fmt.Println(old_graph.diff_trees(new_graph))
+      },
+      Err(err) => {
+        fmt.Println(f"telephone: {err.Error()}")
+      },
+    },
+    Err(err) => {
+      fmt.Println(f"telephone: {err.Error()}")
+    },
+  }
+}
+
+fn usage() {
+  fmt.Println("usage: telephone [--repo <path>] [<old-rev> [<new-rev>]]")
+  fmt.Println("       telephone [--repo <path>] --paths <old-dir> <new-dir>")
 }

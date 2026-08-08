@@ -7,3 +7,40 @@ version = "0.1.0"
 "github.com/mattn/go-pointer" = { version = "v0.0.1", via = ["github.com/tree-sitter/go-tree-sitter"] }
 "github.com/telephone/tsgrammar" = { path = "vendor/tsgrammar" }
 "github.com/telephone/ts-shim" = { path = "vendor/ts-shim" }
+"github.com/go-git/go-git/v5" = "v5.19.2"
+"dario.cat/mergo" = { version = "v1.0.0", via = ["github.com/go-git/go-git/v5"] }
+"github.com/ProtonMail/go-crypto" = { version = "v1.1.6", via = ["github.com/go-git/go-git/v5"] }
+"github.com/bwesterb/go-ristretto" = { version = "v1.2.3", via = ["github.com/cloudflare/circl"] }
+"github.com/cloudflare/circl" = { version = "v1.6.3", via = ["github.com/ProtonMail/go-crypto"] }
+"github.com/creack/pty" = { version = "v1.1.9", via = ["github.com/kr/text"] }
+"github.com/cyphar/filepath-securejoin" = { version = "v0.6.1", via = ["github.com/go-git/go-billy/v5"] }
+"github.com/emirpasic/gods" = { version = "v1.18.1", via = ["github.com/go-git/go-git/v5"] }
+"github.com/go-git/gcfg" = { version = "v1.5.1-0.20230307220236-3a3c6141e376", via = ["github.com/go-git/go-git/v5"] }
+"github.com/go-git/go-billy/v5" = { version = "v5.9.0", via = ["github.com/go-git/go-git-fixtures/v4", "github.com/go-git/go-git/v5"] }
+"github.com/go-git/go-git-fixtures/v4" = { version = "v4.3.2-0.20231010084843-55a94097c399", via = ["github.com/go-git/go-git/v5"] }
+"github.com/golang/groupcache" = { version = "v0.0.0-20241129210726-2c02b8208cf8", via = ["github.com/go-git/go-git/v5"] }
+"github.com/golang/protobuf" = { version = "v1.5.4", via = ["github.com/golang/groupcache"] }
+"github.com/google/go-cmp" = { version = "v0.7.0", via = ["google.golang.org/protobuf"] }
+"github.com/jbenet/go-context" = { version = "v0.0.0-20150711004518-d14ea06fba99", via = ["github.com/go-git/go-git/v5"] }
+"github.com/kevinburke/ssh_config" = { version = "v1.2.0", via = ["github.com/go-git/go-git/v5"] }
+"github.com/klauspost/cpuid/v2" = { version = "v2.3.0", via = ["github.com/pjbgf/sha1cd"] }
+"github.com/kr/pretty" = { version = "v0.3.1", via = ["gopkg.in/check.v1"] }
+"github.com/kr/text" = { version = "v0.2.0", via = ["github.com/kr/pretty"] }
+"github.com/pjbgf/sha1cd" = { version = "v0.6.0", via = ["github.com/go-git/go-git/v5"] }
+"github.com/rogpeppe/go-internal" = { version = "v1.14.1", via = ["github.com/kr/pretty"] }
+"github.com/sergi/go-diff" = { version = "v1.4.0", via = ["github.com/go-git/go-git/v5"] }
+"github.com/skeema/knownhosts" = { version = "v1.3.1", via = ["github.com/go-git/go-git/v5"] }
+"github.com/xanzy/ssh-agent" = { version = "v0.3.3", via = ["github.com/go-git/go-git/v5"] }
+"github.com/yuin/goldmark" = { version = "v1.4.13", via = ["golang.org/x/tools"] }
+"golang.org/x/crypto" = { version = "v0.54.0", via = ["github.com/ProtonMail/go-crypto", "github.com/cloudflare/circl", "github.com/go-git/go-git/v5", "github.com/skeema/knownhosts", "github.com/xanzy/ssh-agent", "golang.org/x/net"] }
+"golang.org/x/mod" = { version = "v0.37.0", via = ["github.com/rogpeppe/go-internal", "golang.org/x/telemetry", "golang.org/x/tools"] }
+"golang.org/x/net" = { version = "v0.56.0", via = ["github.com/go-git/go-git/v5", "github.com/jbenet/go-context", "golang.org/x/crypto", "golang.org/x/tools"] }
+"golang.org/x/sync" = { version = "v0.22.0", via = ["golang.org/x/telemetry", "golang.org/x/tools"] }
+"golang.org/x/sys" = { version = "v0.47.0", via = ["github.com/cloudflare/circl", "github.com/cyphar/filepath-securejoin", "github.com/go-git/go-billy/v5", "github.com/go-git/go-git/v5", "golang.org/x/crypto", "golang.org/x/net", "golang.org/x/telemetry", "golang.org/x/term"] }
+"golang.org/x/telemetry" = { version = "v0.0.0-20260625142307-59b4966ccb57", via = ["golang.org/x/tools"] }
+"golang.org/x/term" = { version = "v0.45.0", via = ["golang.org/x/crypto", "golang.org/x/net"] }
+"golang.org/x/text" = { version = "v0.40.0", via = ["golang.org/x/net"] }
+"golang.org/x/tools" = { version = "v0.47.0", via = ["github.com/rogpeppe/go-internal", "golang.org/x/text"] }
+"google.golang.org/protobuf" = { version = "v1.33.0", via = ["github.com/golang/protobuf"] }
+"gopkg.in/check.v1" = { version = "v1.0.0-20201130134442-10cb98267c6c", via = ["github.com/go-git/go-billy/v5", "github.com/go-git/go-git-fixtures/v4", "github.com/go-git/go-git/v5"] }
+"gopkg.in/warnings.v0" = { version = "v0.1.2", via = ["github.com/go-git/gcfg"] }
