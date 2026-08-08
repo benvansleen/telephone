@@ -1,8 +1,8 @@
 import "go:fmt"
 import "go:os"
 
+import "analyzer"
 import "source"
-import "treesitter/golang"
 
 fn main() {
   let mut repo = "."
@@ -54,8 +54,8 @@ fn compare_git(repo: string, old_revision: string, new_revision: Option<string>)
 }
 
 fn compare_paths(old_path: string, new_path: string) {
-  match golang.analyze_dir(old_path) {
-    Ok(old) => match golang.analyze_dir(new_path) {
+  match analyzer.analyze_dir(old_path) {
+    Ok(old) => match analyzer.analyze_dir(new_path) {
       Ok(new) => {
         fmt.Println()
         fmt.Println(f"Call graph diff {old_path} -> {new_path}")
@@ -72,8 +72,8 @@ fn compare_paths(old_path: string, new_path: string) {
 }
 
 fn print_diff(old: source.Snapshot, new: source.Snapshot) {
-  match golang.analyze_files(old.files) {
-    Ok(old_graph) => match golang.analyze_files(new.files) {
+  match analyzer.analyze_files(old.files) {
+    Ok(old_graph) => match analyzer.analyze_files(new.files) {
       Ok(new_graph) => {
         fmt.Println()
         fmt.Println(f"Call graph diff {old.label} -> {new.label}")

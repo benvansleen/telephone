@@ -1,0 +1,14 @@
+import "callgraph"
+import lisette_adapter "treesitter/lisette"
+import "source"
+import "treesitter/golang"
+
+pub fn analyze_dir(root: string) -> Result<callgraph.Graph, error> {
+  analyze_files(source.files(root)?)
+}
+
+pub fn analyze_files(files: Slice<source.File>) -> Result<callgraph.Graph, error> {
+  let go = golang.analyze_files(files)?
+  let lisette_graph = lisette_adapter.analyze_files(files)?
+  Ok(go.merge(lisette_graph))
+}

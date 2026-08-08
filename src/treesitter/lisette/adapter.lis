@@ -1,0 +1,177 @@
+import "go:github.com/telephone/ts-shim"
+import "go:github.com/telephone/tsgrammar"
+import ts "go:github.com/tree-sitter/go-tree-sitter"
+
+import "treesitter"
+
+pub struct Lisette {}
+
+impl Lisette {
+  pub fn new() -> Lisette {
+    Lisette {}
+  }
+
+  pub fn supports(self, path: string) -> bool {
+    path.ends_with(".lis")
+  }
+
+  pub fn extract(self, path: string, source: Slice<byte>) -> treesitter.ExtractedFile {
+    let parser = ts.NewParser()
+    defer parser.Close()
+    let language = ts.NewLanguage(tsgrammar.LisetteLanguage())
+    if let Err(_) = parser.SetLanguage(language) { return empty_file(path) }
+    let Some(tree) = parser.Parse(source, tsshim.NewEmptyTree()) else {
+      return empty_file(path)
+    }
+    defer tree.Close()
+
+    let mut declarations: Slice<string> = Slice.new()
+    if let Ok(query) = treesitter.compile(language, declarations_query()) {
+      defer query.Close()
+      for group in treesitter.matches(query, tree.RootNode(), source) {
+        for hit in group {
+          if hit.name != "name" { continue }
+          let mut node = hit.node
+          let name = node.Utf8Text(source)
+          let declaration = declaration_of(node)
+          let identity = impl_type(declaration, source).map_or(
+            name,
+            |type_name| f"{type_name}.{name}",
+          )
+          if !declarations.contains(identity) {
+            declarations = declarations.append(identity)
+          }
+        }
+      }
+    }
+
+    let mut calls: Slice<treesitter.ExtractedCall> = Slice.new()
+    let mut seen: Slice<string> = Slice.new()
+    if let Ok(query) = treesitter.compile(language, calls_query()) {
+      defer query.Close()
+      for group in treesitter.matches(query, tree.RootNode(), source) {
+        for hit in group {
+          if hit.name != "callee" { continue }
+          let mut node = hit.node
+          let callee = node.Utf8Text(source)
+          let caller = caller_of(node, source)
+          let key = f"{caller}|{callee}"
+          if seen.contains(key) { continue }
+          seen = seen.append(key)
+          calls = calls.append(
+            treesitter.ExtractedCall { caller, callee, kind: "unresolved" },
+          )
+        }
+      }
+    }
+
+    let mut imports: Slice<treesitter.ExtractedImport> = Slice.new()
+    if let Ok(query) = treesitter.compile(language, imports_query()) {
+      defer query.Close()
+      for group in treesitter.matches(query, tree.RootNode(), source) {
+        let mut alias = ""
+        let mut import_path = ""
+        for hit in group {
+          let mut node = hit.node
+          match hit.name {
+            "alias" => alias = node.Utf8Text(source),
+            "path" => import_path = unquote(node.Utf8Text(source)),
+            _ => (),
+          }
+        }
+        if import_path == "" { continue }
+        imports = imports.append(
+          treesitter.ExtractedImport {
+            alias,
+            path: import_path,
+            is_go: import_path.starts_with("go:"),
+          },
+        )
+      }
+    }
+    treesitter.ExtractedFile { path, declarations, calls, imports }
+  }
+}
+
+fn empty_file(path: string) -> treesitter.ExtractedFile {
+  treesitter.ExtractedFile {
+    path,
+    declarations: Slice.new(),
+    calls: Slice.new(),
+    imports: Slice.new(),
+  }
+}
+
+fn declarations_query() -> string {
+  "(function_item name: (identifier) @name)"
+}
+
+fn calls_query() -> string {
+  "[
+  (call_expression function: (_) @callee)
+  (generic_call_expression function: (_) @callee)
+  (binary_expression operator: \"|>\" right: (identifier) @callee)
+  (binary_expression operator: \"|>\" right: (field_expression) @callee)
+]"
+}
+
+fn imports_query() -> string {
+  "(import_declaration
+  alias: (identifier)? @alias
+  path: (string_literal) @path)"
+}
+
+fn caller_of(start: ts.Node, source: Slice<byte>) -> string {
+  let declaration = declaration_of(start)
+  let Some(declaration) = declaration else {
+    return "<global>"
+  }
+  let name = declaration
+    .ChildByFieldName("name")
+    .map_or("", |node| node.Utf8Text(source))
+  impl_type(Some(declaration), source).map_or(
+    name,
+    |type_name| f"{type_name}.{name}",
+  )
+}
+
+fn declaration_of(start: ts.Node) -> Option<Ref<ts.Node>> {
+  let mut node = start
+  let mut current = node.Parent()
+  loop {
+    let Some(parent) = current else {
+      return None
+    }
+    if parent.Kind() == "function_item" { return Some(parent) }
+    current = parent.Parent()
+  }
+}
+
+fn impl_type(start: Option<Ref<ts.Node>>, source: Slice<byte>) -> Option<string> {
+  let Some(start) = start else {
+    return None
+  }
+  let node = start
+  let mut current = node.Parent()
+  loop {
+    let Some(parent) = current else {
+      return None
+    }
+    if parent.Kind() == "impl_item" {
+      return parent
+        .ChildByFieldName("type")
+        .map(|type_node| {
+          base_type(type_node.Utf8Text(source))
+        })
+    }
+    current = parent.Parent()
+  }
+}
+
+fn base_type(type_name: string) -> string {
+  type_name.split("<")[0]
+}
+
+fn unquote(text: string) -> string {
+  text.substring(1..text.length() - 1)
+}

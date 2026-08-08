@@ -24,9 +24,11 @@
               "-euc"
               /* sh */ ''
                 for file in "$@"; do
+                  echo "formatting $file"
                   ${lib.getExe pkgs.lisette} format $file
                 done
               ''
+              "--"
             ];
             includes = [ "**/*.lis" ];
           };

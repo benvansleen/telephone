@@ -17,6 +17,24 @@ fn has_symbol(symbols: Slice<Symbol>, wanted: Symbol) -> bool {
 }
 
 impl Graph {
+  pub fn merge(self, other: Graph) -> Graph {
+    let mut decls = self.decls.clone()
+    for declaration in other.decls {
+      if !has_symbol(decls, declaration) { decls = decls.append(declaration) }
+    }
+    let mut edges = self.edges.clone()
+    for edge in other.edges {
+      let exists = edges
+        .find(|current| {
+          current.caller.equals(edge.caller) &&
+          current.callee.equals(edge.callee)
+        })
+        .is_some()
+      if !exists { edges = edges.append(edge) }
+    }
+    Graph { decls, edges }
+  }
+
   pub fn diff_trees(self, other: Graph) -> string {
     let a_callees = self.adjacency()
     let b_callees = other.adjacency()

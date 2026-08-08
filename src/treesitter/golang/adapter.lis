@@ -17,6 +17,7 @@ impl Go {
 
   pub fn extract(self, path: string, source: Slice<byte>) -> treesitter.ExtractedFile {
     let parser = ts.NewParser()
+    defer parser.Close()
     let language = ts.NewLanguage(tsgo.GoLanguage())
     if let Err(_) = parser.SetLanguage(language) { return empty_file(path) }
     let Some(tree) = parser.Parse(source, tsshim.NewEmptyTree()) else {
@@ -79,7 +80,7 @@ impl Go {
         }
       }
     }
-    treesitter.ExtractedFile { path, declarations, calls }
+    treesitter.ExtractedFile { path, declarations, calls, imports: Slice.new() }
   }
 }
 
@@ -88,6 +89,7 @@ fn empty_file(path: string) -> treesitter.ExtractedFile {
     path,
     declarations: Slice.new(),
     calls: Slice.new(),
+    imports: Slice.new(),
   }
 }
 

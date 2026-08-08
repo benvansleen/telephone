@@ -1,0 +1,84 @@
+import "callgraph"
+import "source"
+import "treesitter"
+
+fn analyze(content: string) -> callgraph.Graph {
+  resolve([Lisette.new().extract("app.lis", content.bytes())])
+}
+
+fn has_edge(
+  graph: callgraph.Graph,
+  caller: string,
+  callee: string,
+  kind: string,
+) -> bool {
+  for edge in graph.edges {
+    if edge.caller.name == caller && edge.callee.name == callee && edge.kind == kind {
+      return true
+    }
+  }
+  false
+}
+
+#[test]
+fn implements_treesitter_adapter() {
+  let adapter: treesitter.Adapter = Lisette.new()
+  assert adapter.supports("main.lis")
+  assert adapter.supports("main.test.lis")
+}
+
+#[test]
+fn extracts_functions_methods_and_calls() {
+  let graph = analyze(
+    "struct Worker {}
+
+impl Worker {
+  fn run(self) { helper() }
+}
+
+fn helper() {}
+
+fn start() {
+  let worker = Worker {}
+  worker.run()
+  helper()
+  worker |> notify
+  generic<int>()
+  task { helper() }
+}
+
+fn notify(worker: Worker) {}
+
+fn generic<T>() {}
+",
+  )
+  assert graph.decls.length() == 5
+  assert has_edge(graph, "Worker.run", "helper", "local")
+  assert has_edge(graph, "start", "Worker.run", "local")
+  assert has_edge(graph, "start", "helper", "local")
+  assert has_edge(graph, "start", "notify", "local")
+  assert has_edge(graph, "start", "generic", "local")
+}
+
+#[test]
+fn resolves_imported_package_and_keeps_go_calls_external() {
+  let files = [
+    source.File { path: "models/user.lis", content: "pub fn load() {}".bytes() },
+    source.File {
+      path: "main.lis",
+      content: "import m \"models\"
+import \"go:fmt\"
+
+fn main() {
+  m.load()
+  fmt.Println(\"ok\")
+}".bytes(),
+    },
+  ]
+  let Ok(graph) = analyze_files(files) else {
+    assert false
+    return
+  }
+  assert has_edge(graph, "main", "load", "local")
+  assert has_edge(graph, "main", "fmt.Println", "external")
+}

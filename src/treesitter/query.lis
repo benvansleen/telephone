@@ -6,10 +6,17 @@ pub struct ExtractedCall {
   pub kind: string,
 }
 
+pub struct ExtractedImport {
+  pub alias: string,
+  pub path: string,
+  pub is_go: bool,
+}
+
 pub struct ExtractedFile {
   pub path: string,
   pub declarations: Slice<string>,
   pub calls: Slice<ExtractedCall>,
+  pub imports: Slice<ExtractedImport>,
 }
 
 pub interface Adapter {
