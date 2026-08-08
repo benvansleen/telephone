@@ -17,7 +17,7 @@
       packages = {
         default = pkgs.buildLisetteModule {
           src = inputs.gitignore.lib.gitignoreSource ../.;
-          vendorHash = "sha256-VpmvNZwZ2MEJJ+c2k+ZBnqBdeBsw5iZ4eqIzZzoEM24=";
+          vendorHash = "sha256-BHZHVetosDmHP1vPwlJl6pSxzIRmPJ4aFjwYwzOGj3Y=";
         };
       };
     };

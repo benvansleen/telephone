@@ -97,6 +97,7 @@
 
                       # Final tidy'd graph: needed by `go mod tidy` and the Go build.
                       mkdir deps-final
+                      cp -r ${src}/vendor deps-final/lisette-vendor
                       cp ${go-mod} deps-final/go.mod
                       ${if builtins.pathExists go-sum then "cp ${go-sum} deps-final/go.sum" else ""}
                       chmod -R u+w deps-final
