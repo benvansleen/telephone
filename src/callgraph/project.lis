@@ -1,0 +1,107 @@
+import "go:os"
+import "go:path/filepath"
+import "go:strings"
+
+pub fn analyze_dir(root: string) -> Result<Graph, error> {
+  let declarations = os.ReadFile("./queries/decls.scm")? as string
+  let calls = os.ReadFile("./queries/calls.scm")? as string
+  analyze_dir_with(root, declarations, calls)
+}
+
+fn analyze_dir_with(root: string, declarations: string, calls: string) -> Result<Graph, error> {
+  let files = collect_go_files(root)
+  let mut function_index: Map<string, Symbol> = Map.new()
+  let mut method_index: Map<string, Option<Symbol>> = Map.new()
+  let mut per_file: Slice<(string, Graph)> = Slice.new()
+  let mut graph = Graph { decls: Slice.new(), edges: Slice.new() }
+
+  for path in files {
+    let content = os.ReadFile(path)?
+    let file = relpath(root, path)
+    let parsed = Graph.analyze(content, declarations, calls)
+    per_file = per_file.append((file, parsed))
+    for declaration in parsed.decls {
+      let symbol = Symbol.local(file, declaration.name)
+      graph.decls = graph.decls.append(symbol)
+      if declaration.name.contains(".") {
+        let name = field_name(declaration.name)
+        match method_index.get(name) {
+          Some(_) => method_index[name] = None,
+          None => method_index[name] = Some(symbol),
+        }
+      } else {
+        function_index[declaration.name] = symbol
+      }
+    }
+  }
+
+  for (file, parsed) in per_file {
+    for edge in parsed.edges {
+      let caller = Symbol.local(file, edge.caller.name)
+      let (callee, kind) = match edge.kind {
+        "local" => (
+          function_index
+            .get(edge.callee.name)
+            .unwrap_or_else(|| Symbol.local(file, edge.callee.name)),
+          "local",
+        ),
+        "method" => (Symbol.local(file, edge.callee.name), "method"),
+        _ => resolve_external(edge.callee.name, function_index, method_index),
+      }
+      graph.edges = graph.edges.append(Edge { caller, callee, kind })
+    }
+  }
+  Ok(graph)
+}
+
+fn resolve_external(
+  callee: string,
+  function_index: Map<string, Symbol>,
+  method_index: Map<string, Option<Symbol>>,
+) -> (Symbol, string) {
+  if callee.contains(".") {
+    match method_index.get(field_name(callee)) {
+      Some(Some(symbol)) => (symbol, "method"),
+      _ => (Symbol.external(callee), "external"),
+    }
+  } else {
+    function_index
+      .get(callee)
+      .map_or_else(|| (Symbol.external(callee), "external"), |symbol| (
+        symbol,
+        "local",
+      ))
+  }
+}
+
+fn collect_go_files(dir: string) -> Slice<string> {
+  let entries = os.ReadDir(dir).ok().unwrap_or_else(|| Slice.new())
+  let mut files: Slice<string> = Slice.new()
+  for entry in entries {
+    let name = entry.Name()
+    if entry.IsDir() {
+      if skip_dir(name) { continue }
+      for path in collect_go_files(filepath.Join(dir, name)) {
+        files = files.append(path)
+      }
+    } else if name.ends_with(".go") && !name.starts_with(".") {
+      files = files.append(filepath.Join(dir, name))
+    }
+  }
+  files
+}
+
+fn skip_dir(name: string) -> bool {
+  name == ".git" || name == "vendor" || name == "target" ||
+  name == "node_modules"
+}
+
+fn relpath(root: string, path: string) -> string {
+  let root = strings.TrimPrefix(root, "./")
+  let path = strings.TrimPrefix(path, "./")
+  if path.starts_with(root) {
+    path.substring((root.length() + 1)..path.length())
+  } else {
+    path
+  }
+}

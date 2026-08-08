@@ -1,0 +1,58 @@
+enum SymbolLocation {
+  File { path: string },
+  PendingFile,
+  External,
+}
+
+struct Symbol { location: SymbolLocation, name: string }
+
+impl Symbol {
+  fn local(file: string, name: string) -> Symbol {
+    Symbol { location: SymbolLocation.File { path: file }, name }
+  }
+
+  fn pending(name: string) -> Symbol {
+    Symbol { location: SymbolLocation.PendingFile, name }
+  }
+
+  fn external(name: string) -> Symbol {
+    Symbol { location: SymbolLocation.External, name }
+  }
+
+  fn to_key(self) -> string {
+    match self.location {
+      SymbolLocation.File { path } => f"file:{path.length()}:{path}:{self.name}",
+      SymbolLocation.PendingFile => f"pending:{self.name}",
+      SymbolLocation.External => f"external:{self.name}",
+    }
+  }
+
+  fn display_key(self) -> string {
+    match self.location {
+      SymbolLocation.File { path } => f"{path}:{self.name}",
+      SymbolLocation.PendingFile | SymbolLocation.External => self.name,
+    }
+  }
+
+  fn file(self) -> Option<string> {
+    match self.location {
+      SymbolLocation.File { path } => Some(path),
+      SymbolLocation.PendingFile | SymbolLocation.External => None,
+    }
+  }
+
+  fn equals(self, other: Symbol) -> bool {
+    self.to_key() == other.to_key()
+  }
+
+  fn display_callee(self, caller_file: string) -> string {
+    match self.location {
+      SymbolLocation.External => f"{self.name} (external)",
+      SymbolLocation.File { path } if path == caller_file => self.name,
+      SymbolLocation.File { path } => f"{self.name} ({path})",
+      SymbolLocation.PendingFile => {
+        panic("unresolved pending file")
+      },
+    }
+  }
+}

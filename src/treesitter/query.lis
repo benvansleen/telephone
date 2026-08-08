@@ -8,9 +8,12 @@ struct Capture {
   end: uint,
 }
 
-struct QueryHit { name: string, node: ts.Node }
+pub struct QueryHit {
+  pub name: string,
+  pub node: ts.Node,
+}
 
-fn matches(query: Ref<ts.Query>, root: Ref<ts.Node>, text: Slice<byte>) -> Slice<Slice<QueryHit>> {
+pub fn matches(query: Ref<ts.Query>, root: Ref<ts.Node>, text: Slice<byte>) -> Slice<Slice<QueryHit>> {
   let cursor = ts.NewQueryCursor()
   defer cursor.Close()
 
@@ -33,7 +36,7 @@ fn matches(query: Ref<ts.Query>, root: Ref<ts.Node>, text: Slice<byte>) -> Slice
   out
 }
 
-fn compile(language: Ref<ts.Language>, source: string) -> Result<Ref<ts.Query>, string> {
+pub fn compile(language: Ref<ts.Language>, source: string) -> Result<Ref<ts.Query>, string> {
   let (query, err) = ts.NewQuery(language, source)
   query.ok_or_else(|| f"{err.Message} at {err.Row}:{err.Column}")
 }

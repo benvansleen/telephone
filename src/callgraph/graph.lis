@@ -1,0 +1,140 @@
+import "go:slices"
+import "go:strings"
+
+struct Edge { caller: Symbol, callee: Symbol, kind: string }
+
+pub struct Graph { decls: Slice<Symbol>, edges: Slice<Edge> }
+
+fn has_symbol(symbols: Slice<Symbol>, wanted: Symbol) -> bool {
+  symbols.find(|symbol| symbol.equals(wanted)).is_some()
+}
+
+impl Graph {
+  pub fn diff_trees(self, other: Graph) -> string {
+    let a_callees = self.adjacency()
+    let b_callees = other.adjacency()
+    // Lisette currently lowers `other.decls_by_file()` as `self.declsByFile()`.
+    // Pass both graphs explicitly until that compiler bug is fixed.
+    let a_files = decls_by_file(self)
+    let b_files = decls_by_file(other)
+
+    let mut file_names: Slice<string> = Slice.new()
+    for (file, _) in a_files {
+      file_names = file_names.append(file)
+    }
+    for (file, _) in b_files {
+      if !file_names.contains(file) { file_names = file_names.append(file) }
+    }
+    slices.Sort(file_names)
+
+    let mut lines: Slice<string> = Slice.new()
+    for file in file_names {
+      let mut fn_lines: Slice<string> = Slice.new()
+      let a_names = a_files.get(file).unwrap_or_else(|| Slice.new())
+      let b_names = b_files.get(file).unwrap_or_else(|| Slice.new())
+      let mut names: Slice<string> = Slice.new()
+      for n in a_names {
+        if !names.contains(n) { names = names.append(n) }
+      }
+      for n in b_names {
+        if !names.contains(n) { names = names.append(n) }
+      }
+      slices.Sort(names)
+
+      for name in names {
+        let in_a = a_names.contains(name)
+        let in_b = b_names.contains(name)
+        if !in_b {
+          fn_lines = fn_lines.append(f"  - {name}")
+        } else if !in_a {
+          fn_lines = fn_lines.append(f"  + {name}")
+        } else {
+          let identity = Symbol.local(file, name).to_key()
+          let ac = a_callees.get(identity).unwrap_or_else(|| Slice.new())
+          let bc = b_callees.get(identity).unwrap_or_else(|| Slice.new())
+          let mut added: Slice<string> = Slice.new()
+          for c in bc {
+            if !has_symbol(ac, c) {
+              added = added.append(f"    + {c.display_callee(file)}")
+            }
+          }
+          let mut removed: Slice<string> = Slice.new()
+          for c in ac {
+            if !has_symbol(bc, c) {
+              removed = removed.append(f"    - {c.display_callee(file)}")
+            }
+          }
+          if added.length() > 0 || removed.length() > 0 {
+            slices.Sort(added)
+            slices.Sort(removed)
+            fn_lines = fn_lines.append(f"  {name}")
+            for l in added {
+              fn_lines = fn_lines.append(l)
+            }
+            for l in removed {
+              fn_lines = fn_lines.append(l)
+            }
+          }
+        }
+      }
+
+      if fn_lines.length() > 0 {
+        lines = lines.append(f"{file}:")
+        for l in fn_lines {
+          lines = lines.append(l)
+        }
+      }
+    }
+    strings.Join(lines, "\n")
+  }
+
+  fn adjacency(self) -> Map<string, Slice<Symbol>> {
+    let mut map: Map<string, Slice<Symbol>> = Map.new()
+    for e in self.edges {
+      let key = e.caller.to_key()
+      let mut list = map.get(key).unwrap_or_else(|| Slice.new())
+      if !has_symbol(list, e.callee) { list = list.append(e.callee) }
+      map[key] = list
+    }
+    map
+  }
+
+  pub fn render_tree(self) -> string {
+    let callees = self.adjacency()
+    let files = decls_by_file(self)
+
+    let mut file_names: Slice<string> = Slice.new()
+    for (file, _) in files {
+      file_names = file_names.append(file)
+    }
+    slices.Sort(file_names)
+
+    let mut lines: Slice<string> = Slice.new()
+    for file in file_names {
+      lines = lines.append(f"{file}:")
+      let mut names = files.get(file).unwrap_or_else(|| Slice.new())
+      slices.Sort(names)
+      for name in names {
+        lines = lines.append(f"  {name}")
+        let identity = Symbol.local(file, name).to_key()
+        let list = callees.get(identity).unwrap_or_else(|| Slice.new())
+        for c in list {
+          lines = lines.append(f"    - {c.display_callee(file)}")
+        }
+      }
+    }
+    strings.Join(lines, "\n")
+  }
+}
+
+fn decls_by_file(graph: Graph) -> Map<string, Slice<string>> {
+  let mut map: Map<string, Slice<string>> = Map.new()
+  for d in graph.decls {
+    let file = d.file().unwrap_or("")
+    let name = d.name
+    let mut list = map.get(file).unwrap_or_else(|| Slice.new())
+    if !list.contains(name) { list = list.append(name) }
+    map[file] = list
+  }
+  map
+}
