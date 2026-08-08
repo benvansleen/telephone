@@ -401,6 +401,42 @@ func newWork() {}
 }
 
 #[test]
+fn commit_fixture_reports_cross_file_call_changes() {
+  let root = test_root()
+  let before = filepath.Join(root, "testdata", "commits", "before")
+  let after = filepath.Join(root, "testdata", "commits", "after")
+  let Ok(old_graph) = analyze_dir(before) else {
+    assert false
+    return
+  }
+  let Ok(new_graph) = analyze_dir(after) else {
+    assert false
+    return
+  }
+  assert old_graph.diff_trees(new_graph) ==
+  "audit.go:
+  - logAudit
+  + recordAccess
+auth.go:
+  authenticate
+    + verifyToken (token.go)
+    - legacySession (session.go)
+dashboard.go:
+  renderDashboard
+    + recordAccess (audit.go)
+    - logAudit (audit.go)
+preferences.go:
+  + hydratePreferences
+profile.go:
+  loadProfile
+    + hydratePreferences (preferences.go)
+session.go:
+  - legacySession
+token.go:
+  + verifyToken"
+}
+
+#[test]
 fn testdata_project_graph() {
   let root = test_root()
   let dq = os

@@ -1,0 +1,8 @@
+#[test]
+fn relative_path_accepts_a_trailing_root_separator() {
+  assert relative_path(
+    "testdata/commits/before/",
+    "testdata/commits/before/audit.go",
+  ) ==
+  "audit.go"
+}

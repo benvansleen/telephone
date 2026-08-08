@@ -35,7 +35,7 @@ fn collect(root: string, dir: string) -> Result<Slice<File>, error> {
 }
 
 fn relative_path(root: string, path: string) -> string {
-  let root = strings.TrimPrefix(root, "./")
+  let root = strings.TrimSuffix(strings.TrimPrefix(root, "./"), "/")
   let path = strings.TrimPrefix(path, "./")
   if path.starts_with(root) {
     path.substring((root.length() + 1)..path.length())
