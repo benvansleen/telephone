@@ -1,3 +1,5 @@
+import "go:strings"
+
 pub enum SymbolLocation {
   File { path: string },
   External,
@@ -50,5 +52,65 @@ impl Symbol {
       SymbolLocation.File { path } => f"{self.name} ({path})",
     }
     result
+  }
+}
+
+pub struct Symbols { inner: Slice<Symbol> }
+
+impl Symbols {
+  pub fn new() -> Symbols {
+    Symbols { inner: Slice.new() }
+  }
+
+  pub fn from(some: Slice<Symbol>) -> Symbols {
+    Symbols { inner: some }
+  }
+
+  pub fn keys(self) -> Slice<string> {
+    self.inner.map(|symbol| symbol.to_key())
+  }
+
+  pub fn has(self, wanted: Symbol) -> bool {
+    self.inner.find(|symbol| symbol.equals(wanted)).is_some()
+  }
+
+  pub fn get_key(self, key: string) -> Symbol {
+    self.inner
+      .find(|symbol| symbol.to_key() == key)
+      .unwrap_or_else(|| Symbol.external(key))
+  }
+
+  pub fn clone(self) -> Symbols {
+    Symbols { inner: self.inner.clone() }
+  }
+
+  pub fn push(self: Ref<Symbols>, symbol: Symbol) {
+    self.inner = self.inner.append(symbol)
+  }
+
+  pub fn map<T>(self, f: fn(Symbol) -> T) -> Slice<T> {
+    self.inner.map(f)
+  }
+
+  pub fn for_each(self, f: fn(Symbol) -> ()) {
+    for s in self.inner {
+      f(s)
+    }
+  }
+
+  pub fn find(self, f: fn(Symbol) -> bool) -> Option<Symbol> {
+    self.inner.find(f)
+  }
+
+  pub fn reduce<T>(self, init: T, f: fn(T, Symbol) -> T) -> T {
+    let mut acc = init
+    for symbol in self.inner {
+      acc = f(acc, symbol)
+    }
+    acc
+  }
+
+  pub fn count(self) -> int {
+    self.inner.length()
   }
 }

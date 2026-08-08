@@ -14,7 +14,7 @@ func boot() {}".bytes(),
     assert false
     return
   }
-  assert graph.decls.length() == 2
+  assert graph.decls.count() == 2
   assert graph.edges.length() == 1
   assert graph.edges[0].caller.name == "start"
   assert graph.edges[0].callee.name == "boot"

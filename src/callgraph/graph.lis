@@ -24,7 +24,7 @@ pub struct Edge {
 }
 
 pub struct Graph {
-  pub decls: Slice<Symbol>,
+  pub decls: Symbols,
   pub edges: Slice<Edge>,
 }
 
@@ -36,16 +36,12 @@ enum SequenceKind {
 
 struct SequenceItem { kind: SequenceKind, value: string }
 
-fn has_symbol(symbols: Slice<Symbol>, wanted: Symbol) -> bool {
-  symbols.find(|symbol| symbol.equals(wanted)).is_some()
-}
-
 impl Graph {
   pub fn merge(self, other: Graph) -> Graph {
     let mut decls = self.decls.clone()
-    for declaration in other.decls {
-      if !has_symbol(decls, declaration) { decls = decls.append(declaration) }
-    }
+    other.decls.for_each(|declaration| if !decls.has(declaration) {
+      decls.push(declaration)
+    })
     let mut edges = self.edges.clone()
     for edge in other.edges {
       let exists = edges
@@ -101,8 +97,8 @@ impl Graph {
           ),
           _ => {
             let identity = Symbol.local(file, item.value).to_key()
-            let ac = a_callees.get(identity).unwrap_or_else(|| Slice.new())
-            let bc = b_callees.get(identity).unwrap_or_else(|| Slice.new())
+            let ac = a_callees.get(identity).unwrap_or_else(Symbols.new)
+            let bc = b_callees.get(identity).unwrap_or_else(Symbols.new)
             if calls_changed(ac, bc) {
               fn_lines = fn_lines.append(f"  {item.value}")
               fn_lines = append_call_diff(fn_lines, file, ac, bc)
@@ -131,12 +127,12 @@ impl Graph {
     strings.Join(styled, "\n")
   }
 
-  fn adjacency(self) -> Map<string, Slice<Symbol>> {
-    let mut map: Map<string, Slice<Symbol>> = Map.new()
+  fn adjacency(self) -> Map<string, Symbols> {
+    let mut map: Map<string, Symbols> = Map.new()
     for e in self.edges {
       let key = e.caller.to_key()
-      let mut list = map.get(key).unwrap_or_else(|| Slice.new())
-      if !has_symbol(list, e.callee) { list = list.append(e.callee) }
+      let mut list = map.get(key).unwrap_or_else(Symbols.new)
+      if !list.has(e.callee) { list.push(e.callee) }
       map[key] = list
     }
     map
@@ -144,13 +140,13 @@ impl Graph {
 
   fn decls_by_file(self) -> Map<string, Slice<string>> {
     let mut map: Map<string, Slice<string>> = Map.new()
-    for d in self.decls {
+    self.decls.for_each(|d| {
       let file = d.file().unwrap_or("")
       let name = d.name
       let mut list = map.get(file).unwrap_or_else(|| Slice.new())
       if !list.contains(name) { list = list.append(name) }
       map[file] = list
-    }
+    })
     map
   }
 
@@ -172,10 +168,10 @@ impl Graph {
       for name in names {
         lines = lines.append(f"  {name}")
         let identity = Symbol.local(file, name).to_key()
-        let list = callees.get(identity).unwrap_or_else(|| Slice.new())
-        for c in list {
+        let list = callees.get(identity).unwrap_or_else(Symbols.new)
+        list.for_each(|c| {
           lines = lines.append(f"    - {format_callee(c, file)}")
-        }
+        })
       }
     }
     strings.Join(lines, "\n")
@@ -187,30 +183,29 @@ fn append_function(
   marker: string,
   file: string,
   name: string,
-  callees_by_function: Map<string, Slice<Symbol>>,
+  callees_by_function: Map<string, Symbols>,
 ) -> Slice<string> {
   lines = lines.append(f"  {marker} {name}")
   let identity = Symbol.local(file, name).to_key()
-  let callees = callees_by_function.get(identity).unwrap_or_else(|| Slice.new())
-  for callee in callees {
-    lines = lines.append(f"      {format_callee(callee, file)}")
-  }
-  lines
+  let callees = callees_by_function.get(identity).unwrap_or_else(Symbols.new)
+  callees.reduce(lines, |acc, callee| {
+    acc.append(f"      {format_callee(callee, file)}")
+  })
 }
 
 fn append_call_diff(
   mut lines: Slice<string>,
   file: string,
-  old: Slice<Symbol>,
-  new: Slice<Symbol>,
+  old: Symbols,
+  new: Symbols,
 ) -> Slice<string> {
   // Symbols have stable identities but user-facing labels depend on the caller
   // file, so sequence the identities first and render labels afterward.
   // TODO: Emit structured diff lines if another output format needs semantics.
-  for item in sequence(symbol_keys(old), symbol_keys(new)) {
+  for item in sequence(old.keys(), new.keys()) {
     let callee = match item.kind {
-      SequenceKind.Removed => symbol_by_key(old, item.value),
-      _ => symbol_by_key(new, item.value),
+      SequenceKind.Removed => old.get_key(item.value),
+      _ => new.get_key(item.value),
     }
     let prefix = match item.kind {
       SequenceKind.Removed => "    - ",
@@ -222,30 +217,17 @@ fn append_call_diff(
   lines
 }
 
-fn calls_changed(old: Slice<Symbol>, new: Slice<Symbol>) -> bool {
-  old.find(|callee| !has_symbol(new, callee)).is_some() ||
-  new.find(|callee| !has_symbol(old, callee)).is_some()
+fn calls_changed(old: Symbols, new: Symbols) -> bool {
+  old.find(|callee| !new.has(callee)).is_some() ||
+  new.find(|callee| !old.has(callee)).is_some()
 }
 
 fn format_callee(callee: Symbol, file: string) -> string {
   // Tree-sitter preserves line breaks in fluent-call expressions. Continue
   // selectors beneath their receiver rather than using their source indentation.
-  strings.ReplaceAll(callee.display_callee(file), "\n", "\n        ")
-}
-
-fn symbol_keys(symbols: Slice<Symbol>) -> Slice<string> {
-  let mut keys: Slice<string> = Slice.new()
-  for symbol in symbols {
-    keys = keys.append(symbol.to_key())
-  }
-  keys
-}
-
-fn symbol_by_key(symbols: Slice<Symbol>, key: string) -> Symbol {
-  // TODO: Build a lookup map if profiling shows these small linear scans matter.
-  symbols
-    .find(|symbol| symbol.to_key() == key)
-    .unwrap_or_else(|| Symbol.external(key))
+  file
+    |> callee.display_callee
+    |> strings.ReplaceAll("\n", "\n        ")
 }
 
 fn sequence(old: Slice<string>, new: Slice<string>) -> Slice<SequenceItem> {

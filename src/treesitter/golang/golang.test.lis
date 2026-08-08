@@ -24,10 +24,9 @@ fn implements_treesitter_adapter() {
 }
 
 fn render_graph(graph: callgraph.Graph) -> string {
-  let mut lines: Slice<string> = Slice.new()
-  for d in graph.decls {
-    lines = lines.append(f"def {d.display_key()}")
-  }
+  let mut lines = graph.decls.reduce(Slice.new(), |acc, d| {
+    acc.append(f"def {d.display_key()}")
+  })
   for e in graph.edges {
     lines = lines.append(
       f"edge {e.caller.display_key()} -> {e.callee.display_key()} ({e.kind})",
@@ -90,11 +89,8 @@ func Foo() {
   assert graph.edges[0].kind == "external"
 }
 
-fn has_decl(decls: Slice<callgraph.Symbol>, name: string) -> bool {
-  for decl in decls {
-    if decl.name == name { return true }
-  }
-  false
+fn has_decl(decls: callgraph.Symbols, name: string) -> bool {
+  decls.find(|d| d.name == name).is_some()
 }
 
 fn has_edge(
@@ -344,7 +340,7 @@ func worker() {
 #[test]
 fn render_tree_indents_fluent_call_continuations() {
   let graph = callgraph.Graph {
-    decls: [callgraph.Symbol.local("a.go", "Run")],
+    decls: callgraph.Symbols.from([callgraph.Symbol.local("a.go", "Run")]),
     edges: [
       callgraph.Edge {
         caller: callgraph.Symbol.local("a.go", "Run"),

@@ -20,7 +20,7 @@ pub fn analyze_files(files: Slice<source.File>) -> Result<callgraph.Graph, error
 }
 
 pub fn resolve(files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
-  let mut declarations: Slice<callgraph.Symbol> = Slice.new()
+  let mut declarations = callgraph.Symbols.new()
   let mut functions: Map<string, callgraph.Symbol> = Map.new()
   let mut methods: Map<string, Option<callgraph.Symbol>> = Map.new()
 
@@ -28,7 +28,7 @@ pub fn resolve(files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
     let package = package_of(file.path)
     for name in file.declarations {
       let symbol = callgraph.Symbol.local(file.path, name)
-      declarations = declarations.append(symbol)
+      declarations.push(symbol)
       if name.contains(".") {
         let method = field_name(name)
         let key = f"{package}.{method}"
