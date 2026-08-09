@@ -12,7 +12,7 @@ pub fn files(root: string) -> Result<Slice<File>, error> {
 }
 
 pub fn supported(path: string) -> bool {
-  path.ends_with(".go") || path.ends_with(".lis")
+  path.ends_with(".go") || path.ends_with(".lis") || path.ends_with(".py")
 }
 
 fn collect(root: string, dir: string) -> Result<Slice<File>, error> {

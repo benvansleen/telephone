@@ -1,0 +1,232 @@
+import "go:strings"
+
+import "callgraph"
+import "treesitter"
+
+struct ResolutionContext {
+  path: string,
+  modules: Slice<string>,
+  packages: Slice<string>,
+  imports: Map<string, treesitter.ExtractedImport>,
+}
+
+impl Python {
+  pub fn resolve(self, files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
+    resolve(files)
+  }
+}
+
+fn resolve(files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
+  let mut declarations = callgraph.Symbols.new()
+  let mut symbols = Map.new()
+  let mut locals = Map.new()
+  for file in files {
+    for name in file.declarations {
+      let symbol = callgraph.Symbol.local(file.path, name)
+      declarations.push(symbol)
+      insert_unique(locals, f"{file.path}|{name}", symbol)
+      for module in module_aliases(file.path) {
+        insert_unique(symbols, f"{module}.{name}", symbol)
+      }
+    }
+  }
+
+  let mut edges = Slice.new()
+  for file in files {
+    let context = resolution_context(file)
+    for call in file.calls {
+      let callee = resolve_call(call, context, symbols, locals)
+      let kind = match callee.location {
+        callgraph.SymbolLocation.File { .. } => "local",
+        callgraph.SymbolLocation.External => "external",
+      }
+      edges = edges.append(
+        callgraph.Edge {
+          caller: callgraph.Symbol.local(file.path, call.caller),
+          callee,
+          kind,
+        },
+      )
+    }
+  }
+  callgraph.Graph { decls: declarations, edges }
+}
+
+fn resolve_call(
+  call: treesitter.ExtractedCall,
+  context: ResolutionContext,
+  symbols: Map<string, Option<callgraph.Symbol>>,
+  locals: Map<string, Option<callgraph.Symbol>>,
+) -> callgraph.Symbol {
+  if !call.callee.contains(".") {
+    return resolve_unqualified(
+      call.callee,
+      call.caller,
+      call.kind,
+      context,
+      symbols,
+      locals,
+    )
+  }
+
+  let parts = call.callee.split(".")
+  let first = parts[0]
+  if (first == "self" || first == "cls") && call.caller.contains(".") {
+    let local = f"{parent_name(call.caller)}.{join_from(parts, 1)}"
+    return local_for(context.path, local, locals, call.callee)
+  }
+  if let Some(imported) = context.imports.get(first) {
+    let mut targets = import_targets(imported.path, context)
+    for index in 0..targets.length() {
+      targets[index] = f"{targets[index]}.{join_from(parts, 1)}"
+    }
+    return symbol_for(targets, symbols, call.callee)
+  }
+  let targets = context.modules.map(|module| f"{module}.{call.callee}")
+  symbol_for(targets, symbols, call.callee)
+}
+
+fn resolve_unqualified(
+  callee: string,
+  caller: string,
+  kind: string,
+  context: ResolutionContext,
+  symbols: Map<string, Option<callgraph.Symbol>>,
+  locals: Map<string, Option<callgraph.Symbol>>,
+) -> callgraph.Symbol {
+  if let Some(imported) = context.imports.get(callee) {
+    return symbol_for(import_targets(imported.path, context), symbols, callee)
+  }
+  if caller != "<module>" && kind != "method" {
+    let parts = caller.split(".")
+    for prefix_length in 1..parts.length() + 1 {
+      let scope = strings.Join(parts[..prefix_length], ".")
+      match locals.get(f"{context.path}|{scope}.{callee}") {
+        Some(Some(symbol)) => return symbol,
+        Some(None) => return callgraph.Symbol.external(callee),
+        None => (),
+      }
+    }
+  }
+  match locals.get(f"{context.path}|{callee}") {
+    Some(Some(symbol)) => symbol,
+    _ => callgraph.Symbol.external(callee),
+  }
+}
+
+fn resolution_context(file: treesitter.ExtractedFile) -> ResolutionContext {
+  let mut imports: Map<string, treesitter.ExtractedImport> = Map.new()
+  for imported in file.imports {
+    if imports.get(imported.alias).is_none() {
+      imports[imported.alias] = imported
+    }
+  }
+  let modules = module_aliases(file.path)
+  let mut packages: Slice<string> = Slice.new()
+  for module in modules {
+    let package = if file.path.ends_with("/__init__.py") || file.path == "__init__.py" {
+      module
+    } else {
+      parent_name(module)
+    }
+    if !packages.contains(package) { packages = packages.append(package) }
+  }
+  ResolutionContext { path: file.path, modules, packages, imports }
+}
+
+fn symbol_for(
+  targets: Slice<string>,
+  symbols: Map<string, Option<callgraph.Symbol>>,
+  fallback: string,
+) -> callgraph.Symbol {
+  let mut found: Option<callgraph.Symbol> = None
+  for target in targets {
+    match symbols.get(target) {
+      Some(None) => return callgraph.Symbol.external(fallback),
+      Some(Some(symbol)) => match found {
+        Some(current) if current.to_key() != symbol.to_key() => {
+          return callgraph.Symbol.external(fallback)
+        },
+        None => found = Some(symbol),
+        _ => (),
+      },
+      None => (),
+    }
+  }
+  found.unwrap_or_else(|| callgraph.Symbol.external(fallback))
+}
+
+fn local_for(
+  path: string,
+  name: string,
+  locals: Map<string, Option<callgraph.Symbol>>,
+  fallback: string,
+) -> callgraph.Symbol {
+  match locals.get(f"{path}|{name}") {
+    Some(Some(symbol)) => symbol,
+    _ => callgraph.Symbol.external(fallback),
+  }
+}
+
+fn import_targets(path: string, context: ResolutionContext) -> Slice<string> {
+  if !path.starts_with(".") { return [path] }
+  let mut rest = path
+  let mut levels = 0
+  while rest.starts_with(".") {
+    levels += 1
+    rest = rest.substring(1..rest.length())
+  }
+  let mut targets = Slice.new()
+  for base in context.packages {
+    let mut package = base
+    for _ in 1..levels {
+      package = parent_name(package)
+    }
+    let target = if package == "" {
+      rest
+    } else if rest == "" { package } else { f"{package}.{rest}" }
+    if !targets.contains(target) { targets = targets.append(target) }
+  }
+  targets
+}
+
+fn module_aliases(path: string) -> Slice<string> {
+  let stem = path.substring(0..path.length() - 3)
+  let mut parts = stem.split("/")
+  if parts[parts.length() - 1] == "__init__" {
+    parts = parts[..parts.length() - 1]
+  }
+  let mut aliases = Slice.new()
+  for start in 0..parts.length() {
+    let alias = strings.Join(parts[start..], ".")
+    if alias != "" && !aliases.contains(alias) {
+      aliases = aliases.append(alias)
+    }
+  }
+  aliases
+}
+
+fn parent_name(name: string) -> string {
+  let parts = name.split(".")
+  if parts.length() < 2 {
+    ""
+  } else {
+    strings.Join(parts[..parts.length() - 1], ".")
+  }
+}
+
+fn join_from(parts: Slice<string>, start: int) -> string {
+  strings.Join(parts[start..], ".")
+}
+
+fn insert_unique(
+  mut index: Map<string, Option<callgraph.Symbol>>,
+  key: string,
+  symbol: callgraph.Symbol,
+) {
+  match index.get(key) {
+    None => index[key] = Some(symbol),
+    Some(Some(current)) if current.to_key() != symbol.to_key() => index[key] = None,
+    _ => (),
+  }
+}

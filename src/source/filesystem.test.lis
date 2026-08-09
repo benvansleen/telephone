@@ -14,6 +14,7 @@ fn relative_path_accepts_a_trailing_root_separator() {
 fn supports_only_analyzed_languages() {
   assert supported("main.go")
   assert supported("main.lis")
+  assert supported("main.py")
   assert !supported("README.md")
   assert !supported("main.js")
 }

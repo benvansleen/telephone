@@ -1,0 +1,242 @@
+import "go:github.com/telephone/ts-shim"
+import "go:github.com/telephone/tsgrammar"
+import ts "go:github.com/tree-sitter/go-tree-sitter"
+
+import "treesitter"
+
+pub struct Python {}
+
+pub struct PythonWorker {
+  ready: bool,
+  parser: Ref<ts.Parser>,
+  cursor: Ref<ts.QueryCursor>,
+  query: Option<Ref<ts.Query>>,
+}
+
+impl Python {
+  pub fn new() -> Python {
+    Python {}
+  }
+
+  pub fn supports(self, path: string) -> bool {
+    path.ends_with(".py")
+  }
+
+  pub fn worker(self) -> treesitter.Worker {
+    PythonWorker.new()
+  }
+
+  pub fn adapter(self) -> treesitter.Adapter {
+    self
+  }
+
+  pub fn extract(self, path: string, source: Slice<byte>) -> treesitter.ExtractedFile {
+    let worker = PythonWorker.new()
+    defer worker.close()
+    worker.extract(path, source)
+  }
+}
+
+impl PythonWorker {
+  fn new() -> PythonWorker {
+    let parser = ts.NewParser()
+    let language = ts.NewLanguage(tsgrammar.PythonLanguage())
+    let ready = parser.SetLanguage(language).is_ok()
+    let query = if ready {
+      treesitter.compile(language, extraction_query()).ok()
+    } else {
+      None
+    }
+    PythonWorker { ready, parser, cursor: ts.NewQueryCursor(), query }
+  }
+
+  pub fn extract(self, path: string, source: Slice<byte>) -> treesitter.ExtractedFile {
+    if !self.ready { return empty_file(path) }
+    self.parser.Reset()
+    let Some(tree) = self.parser.Parse(source, tsshim.NewEmptyTree()) else {
+      return empty_file(path)
+    }
+    defer tree.Close()
+
+    let mut declarations: Slice<string> = Slice.new()
+    let mut declaration_names: Map<string, bool> = Map.new()
+    let mut calls: Slice<treesitter.ExtractedCall> = Slice.new()
+    let mut imports: Slice<treesitter.ExtractedImport> = Slice.new()
+    let mut has_module_call = false
+
+    if let Some(query) = self.query {
+      treesitter.for_each_match_with_cursor(
+        self.cursor,
+        query,
+        tree.RootNode(),
+        source,
+        |group| {
+          let mut import_module = ""
+          let mut import_name = ""
+          let mut import_alias = ""
+          let mut from_module = ""
+          for hit in group {
+            let mut node = hit.node
+            match hit.name {
+              "declaration.name" => {
+                let identity = declaration_identity(node, source)
+                if declaration_names.get(identity).is_none() {
+                  declaration_names[identity] = true
+                  declarations = declarations.append(identity)
+                }
+              },
+              "call.callee" => {
+                let caller = caller_of(node, source)
+                if caller == "<module>" { has_module_call = true }
+                calls = calls.append(
+                  treesitter.ExtractedCall {
+                    caller,
+                    callee: node.Utf8Text(source),
+                    kind: call_kind(node),
+                  },
+                )
+              },
+              "import.module" => import_module = node.Utf8Text(source),
+              "from.module" => from_module = node.Utf8Text(source),
+              "from.name" => import_name = node.Utf8Text(source),
+              "import.alias" | "from.alias" => import_alias = node.Utf8Text(
+                source,
+              ),
+              _ => (),
+            }
+          }
+          if import_module != "" {
+            let alias = if import_alias == "" {
+              first_part(import_module)
+            } else {
+              import_alias
+            }
+            let imported_path = if import_alias == "" {
+              alias
+            } else {
+              import_module
+            }
+            imports = imports.append(
+              treesitter.ExtractedImport {
+                alias,
+                path: imported_path,
+                is_go: false,
+              },
+            )
+          }
+          if from_module != "" && import_name != "" {
+            let alias = if import_alias == "" {
+              first_part(import_name)
+            } else {
+              import_alias
+            }
+            imports = imports.append(
+              treesitter.ExtractedImport {
+                alias,
+                path: f"{from_module}.{import_name}",
+                is_go: false,
+              },
+            )
+          }
+        },
+      )
+    }
+
+    if has_module_call { declarations = declarations.append("<module>") }
+    let mut unique: Slice<treesitter.ExtractedCall> = Slice.new()
+    let mut seen: Map<string, bool> = Map.new()
+    for call in calls {
+      let key = f"{call.caller}|{call.callee}"
+      if seen.get(key).is_some() { continue }
+      seen[key] = true
+      unique = unique.append(call)
+    }
+    treesitter.ExtractedFile { path, declarations, calls: unique, imports }
+  }
+
+  pub fn close(self) {
+    if let Some(query) = self.query { query.Close() }
+    self.cursor.Close()
+    self.parser.Close()
+  }
+}
+
+fn empty_file(path: string) -> treesitter.ExtractedFile {
+  treesitter.ExtractedFile {
+    path,
+    declarations: Slice.new(),
+    calls: Slice.new(),
+    imports: Slice.new(),
+  }
+}
+
+fn extraction_query() -> string {
+  "[
+  (function_definition name: (identifier) @declaration.name)
+  (call function: (_) @call.callee)
+  (import_statement name: (dotted_name) @import.module)
+  (import_statement name: (aliased_import name: (dotted_name) @import.module alias: (identifier) @import.alias))
+  (import_from_statement module_name: (_) @from.module name: (dotted_name) @from.name)
+  (import_from_statement module_name: (_) @from.module name: (aliased_import name: (dotted_name) @from.name alias: (identifier) @from.alias))
+]"
+}
+
+fn caller_of(mut start: ts.Node, source: Slice<byte>) -> string {
+  let mut current = start.Parent()
+  loop {
+    let Some(node) = current else {
+      return "<module>"
+    }
+    if node.Kind() == "function_definition" {
+      return declaration_identity(node.*, source)
+    }
+    current = node.Parent()
+  }
+}
+
+fn declaration_identity(mut start: ts.Node, source: Slice<byte>) -> string {
+  let mut skip_self = start.Kind() != "function_definition" &&
+  start.Kind() != "class_definition"
+  let mut identity = if !skip_self {
+    start.ChildByFieldName("name").map_or("", |name| name.Utf8Text(source))
+  } else {
+    start.Utf8Text(source)
+  }
+  let mut current = start.Parent()
+  loop {
+    let Some(node) = current else {
+      return identity
+    }
+    if node.Kind() == "function_definition" || node.Kind() == "class_definition" {
+      if skip_self {
+        skip_self = false
+      } else {
+        let prefix = node
+          .ChildByFieldName("name")
+          .map_or("", |name| name.Utf8Text(source))
+        if prefix != "" { identity = f"{prefix}.{identity}" }
+      }
+    }
+    current = node.Parent()
+  }
+}
+
+fn call_kind(mut start: ts.Node) -> string {
+  let mut saw_function = false
+  let mut current = start.Parent()
+  loop {
+    let Some(node) = current else {
+      return "function"
+    }
+    if node.Kind() == "function_definition" {
+      if saw_function { return "nested" }
+      saw_function = true
+    }
+    if node.Kind() == "class_definition" && saw_function { return "method" }
+    current = node.Parent()
+  }
+}
+
+fn first_part(path: string) -> string {
+  path.split(".")[0]
+}

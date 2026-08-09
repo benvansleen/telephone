@@ -28,6 +28,13 @@ fn implements_treesitter_adapter() {
 }
 
 #[test]
+fn implements_treesitter_language() {
+  let language: treesitter.Language = Lisette.new()
+  assert language.adapter().supports("main.lis")
+  assert language.resolve(Slice.new()).decls.count() == 0
+}
+
+#[test]
 fn extracts_functions_methods_and_calls() {
   let graph = analyze(
     "struct Worker {}
@@ -75,10 +82,111 @@ fn main() {
 }".bytes(),
     },
   ]
-  let Ok(graph) = analyze_files(files) else {
-    assert false
-    return
-  }
+  let graph = treesitter.analyze_files(Lisette.new(), files)
   assert has_edge(graph, "main", "load", "local")
   assert has_edge(graph, "main", "fmt.Println", "external")
+}
+
+#[test]
+fn resolves_repository_src_imports() {
+  let files = [
+    source.File {
+      path: "src/models/user.lis",
+      content: "pub fn load() {}".bytes(),
+    },
+    source.File {
+      path: "src/main.lis",
+      content: "import \"models\"
+fn main() { models.load() }".bytes(),
+    },
+  ]
+  let graph = treesitter.analyze_files(Lisette.new(), files)
+  assert has_edge(graph, "main", "load", "local")
+}
+
+#[test]
+fn resolves_exact_receivers_with_duplicate_method_names() {
+  let graph = analyze(
+    "struct Python {}
+struct PythonWorker {}
+impl Python { fn new() {} }
+impl PythonWorker { fn new() {} }
+fn build() {
+  Python.new()
+  PythonWorker.new()
+}",
+  )
+  assert has_edge(graph, "build", "Python.new", "local")
+  assert has_edge(graph, "build", "PythonWorker.new", "local")
+}
+
+#[test]
+fn resolves_unique_cross_package_methods() {
+  let files = [
+    source.File {
+      path: "src/callgraph/graph.lis",
+      content: "struct Graph {}
+impl Graph { fn merge(self) {} }".bytes(),
+    },
+    source.File {
+      path: "src/analyzer/main.lis",
+      content: "fn combine(graph: Unknown) { graph.merge() }".bytes(),
+    },
+  ]
+  let graph = treesitter.analyze_files(Lisette.new(), files)
+  assert has_edge(graph, "combine", "Graph.merge", "local")
+}
+
+#[test]
+fn keeps_ambiguous_and_prelude_methods_external() {
+  let files = [
+    source.File {
+      path: "src/one/types.lis",
+      content: "struct One {}
+impl One { fn save(self) {} fn append(self) {} }".bytes(),
+    },
+    source.File {
+      path: "src/two/types.lis",
+      content: "struct Two {}
+impl Two { fn save(self) {} }".bytes(),
+    },
+    source.File {
+      path: "src/app/main.lis",
+      content: "fn run(value: Unknown, items: Slice<int>) {
+  value.save()
+  items.append(1)
+}".bytes(),
+    },
+  ]
+  let graph = treesitter.analyze_files(Lisette.new(), files)
+  assert has_edge(graph, "run", "value.save", "external")
+  assert has_edge(graph, "run", "items.append", "external")
+}
+
+#[test]
+fn normalizes_fluent_call_callees() {
+  let extracted = Lisette
+    .new()
+    .extract(
+      "app.lis",
+      "fn combine(go: Unknown, a: Unknown, b: Unknown) {
+  go.merge(a).merge(b)
+}".bytes(),
+    )
+  assert extracted.calls.length() == 1
+  assert extracted.calls[0].callee == "go.merge"
+}
+
+#[test]
+fn normalizes_multiline_selectors() {
+  let extracted = Lisette
+    .new()
+    .extract(
+      "app.lis",
+      "fn build() {
+  Python
+    .new()
+}".bytes(),
+    )
+  assert extracted.calls[0].callee == "Python.new"
 }

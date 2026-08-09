@@ -1,0 +1,167 @@
+import "callgraph"
+import "source"
+import "treesitter"
+
+fn analyze(content: string) -> callgraph.Graph {
+  resolve([Python.new().extract("app.py", content.bytes())])
+}
+
+fn has_edge(
+  graph: callgraph.Graph,
+  caller: string,
+  callee: string,
+  kind: string,
+) -> bool {
+  for edge in graph.edges {
+    if edge.caller.name == caller && edge.callee.name == callee && edge.kind == kind {
+      return true
+    }
+  }
+  false
+}
+
+#[test]
+fn implements_treesitter_adapter() {
+  let adapter: treesitter.Adapter = Python.new()
+  assert adapter.supports("main.py")
+  assert adapter.supports("main.test.py")
+  assert !adapter.supports("main.pyi")
+}
+
+#[test]
+fn implements_treesitter_language() {
+  let language: treesitter.Language = Python.new()
+  assert language.adapter().supports("main.py")
+  assert language.resolve(Slice.new()).decls.count() == 0
+}
+
+#[test]
+fn extracts_nested_functions_methods_and_module_calls() {
+  let graph = analyze(
+    "boot()
+
+def helper():
+    pass
+
+def outer():
+    def local_helper():
+        pass
+    def inner():
+        local_helper()
+    inner()
+
+class Worker:
+    def run(self):
+        self.stop()
+
+    def stop(self):
+        pass
+",
+  )
+  assert graph.decls.count() == 7
+  assert graph.decls.has(callgraph.Symbol.local("app.py", "outer.inner"))
+  assert has_edge(graph, "<module>", "boot", "external")
+  assert has_edge(graph, "outer", "outer.inner", "local")
+  assert has_edge(graph, "outer.inner", "outer.local_helper", "local")
+  assert has_edge(graph, "Worker.run", "Worker.stop", "local")
+}
+
+#[test]
+fn resolves_absolute_aliased_from_and_relative_imports() {
+  let extracted = Python
+    .new()
+    .extract(
+      "pkg/service.py",
+      "import pkg.util as util
+from .helpers import help".bytes(),
+    )
+  assert extracted.imports.length() == 2
+  let files = [
+    source.File { path: "pkg/util.py", content: "def run(): pass".bytes() },
+    source.File { path: "pkg/helpers.py", content: "def help(): pass".bytes() },
+    source.File {
+      path: "pkg/service.py",
+      content: "import pkg.util as util
+from .helpers import help
+
+def start():
+    util.run()
+    help()".bytes(),
+    },
+  ]
+  let graph = treesitter.analyze_files(Python.new(), files)
+  assert graph.decls.has(callgraph.Symbol.local("pkg/util.py", "run"))
+  assert has_edge(graph, "start", "run", "local")
+  assert has_edge(graph, "start", "help", "local")
+}
+
+#[test]
+fn keeps_dynamic_attributes_external() {
+  let graph = analyze(
+    "class One:
+    def save(self): pass
+
+def run(item):
+    item.save()
+",
+  )
+  assert has_edge(graph, "run", "item.save", "external")
+}
+
+#[test]
+fn resolves_namespace_imports_from_repository_paths() {
+  let files = [
+    source.File {
+      path: "testdata/python_project/app.py",
+      content: "from services.greeting import greet
+def run(): return greet(\"Ada\")".bytes(),
+    },
+    source.File {
+      path: "testdata/python_project/services/greeting.py",
+      content: "from shared.formatting import title
+def greet(name): return title(name)".bytes(),
+    },
+    source.File {
+      path: "testdata/python_project/shared/formatting.py",
+      content: "def title(name): return name".bytes(),
+    },
+  ]
+  let graph = treesitter.analyze_files(Python.new(), files)
+  assert has_edge(graph, "run", "greet", "local")
+  assert has_edge(graph, "greet", "title", "local")
+}
+
+#[test]
+fn resolves_plain_dotted_imports() {
+  let files = [
+    source.File { path: "pkg/util.py", content: "def run(): pass".bytes() },
+    source.File {
+      path: "app.py",
+      content: "import pkg.util
+def start(): pkg.util.run()".bytes(),
+    },
+  ]
+  let graph = treesitter.analyze_files(Python.new(), files)
+  assert has_edge(graph, "start", "run", "local")
+}
+
+#[test]
+fn keeps_ambiguous_module_suffixes_external() {
+  let files = [
+    source.File {
+      path: "one/shared/formatting.py",
+      content: "def title(name): return name".bytes(),
+    },
+    source.File {
+      path: "two/shared/formatting.py",
+      content: "def title(name): return name".bytes(),
+    },
+    source.File {
+      path: "app.py",
+      content: "from shared.formatting import title
+def run(): return title(\"Ada\")".bytes(),
+    },
+  ]
+  let graph = treesitter.analyze_files(Python.new(), files)
+  assert has_edge(graph, "run", "title", "external")
+}

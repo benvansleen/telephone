@@ -1,7 +1,7 @@
 import "source"
 
 #[test]
-fn analyzes_go_and_lisette_files_together() {
+fn analyzes_go_lisette_and_python_files_together() {
   let files = [
     source.File {
       path: "main.go",
@@ -9,16 +9,20 @@ fn analyzes_go_and_lisette_files_together() {
 func boot() {}".bytes(),
     },
     source.File { path: "main.lis", content: "fn start() { boot() }".bytes() },
+    source.File {
+      path: "main.py",
+      content: "def launch():\n    boot()".bytes(),
+    },
   ]
   let Ok(graph) = analyze_files(files) else {
     assert false
     return
   }
-  assert graph.decls.count() == 2
-  assert graph.edges.length() == 1
-  assert graph.edges[0].caller.name == "start"
-  assert graph.edges[0].callee.name == "boot"
-  assert graph.edges[0].kind == "external"
+  assert graph.decls.count() == 3
+  assert graph.edges.length() == 2
+  assert graph.edges.all(
+    |edge| edge.callee.name == "boot" && edge.kind == "external",
+  )
 }
 
 #[test]

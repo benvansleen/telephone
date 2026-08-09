@@ -26,6 +26,10 @@ impl Lisette {
     LisetteWorker.new()
   }
 
+  pub fn adapter(self) -> treesitter.Adapter {
+    self
+  }
+
   pub fn extract(self, path: string, source: Slice<byte>) -> treesitter.ExtractedFile {
     let worker = LisetteWorker.new()
     defer worker.close()
@@ -94,7 +98,7 @@ impl LisetteWorker {
               "callee" => pending_calls = pending_calls.append(
                 treesitter.ExtractedCall {
                   caller: caller_of(node, source, callers),
-                  callee: node.Utf8Text(source),
+                  callee: callee_identity(node, source),
                   kind: "unresolved",
                 },
               ),
@@ -154,6 +158,34 @@ fn extraction_query() -> string {
     alias: (identifier)? @alias
     path: (string_literal) @path)
 ]"
+}
+
+fn callee_identity(mut node: ts.Node, source: Slice<byte>) -> string {
+  if node.Kind() != "field_expression" { return node.Utf8Text(source) }
+  let Some(value) = node.ChildByFieldName("value") else {
+    return node.Utf8Text(source)
+  }
+  let Some(field) = node.ChildByFieldName("field") else {
+    return node.Utf8Text(source)
+  }
+  let receiver = if value.Kind() == "call_expression" {
+    value
+      .ChildByFieldName("function")
+      .map_or("", |function| if function.Kind() == "field_expression" {
+        function
+          .ChildByFieldName("value")
+          .map_or("", |root| callee_identity(root.*, source))
+      } else {
+        callee_identity(function.*, source)
+      })
+  } else {
+    callee_identity(value.*, source)
+  }
+  if receiver == "" {
+    field.Utf8Text(source)
+  } else {
+    f"{receiver}.{field.Utf8Text(source)}"
+  }
 }
 
 fn caller_of(

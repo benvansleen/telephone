@@ -1,7 +1,7 @@
 import "go:path/filepath"
+import "go:strings"
 
 import "callgraph"
-import "source"
 import "treesitter"
 
 struct ResolutionContext {
@@ -9,44 +9,18 @@ struct ResolutionContext {
   imports: Map<string, treesitter.ExtractedImport>,
 }
 
-pub fn analyze_dir(root: string) -> Result<callgraph.Graph, error> {
-  analyze_files(source.files(root)?)
-}
-
-pub fn analyze_files(files: Slice<source.File>) -> Result<callgraph.Graph, error> {
-  let adapter = Lisette.new()
-  let extracted = treesitter.extract_files(adapter, files)
-  Ok(resolve(extracted))
-}
-
-pub fn analyze_file_sets(
-  old_files: Slice<source.File>,
-  new_files: Slice<source.File>,
-) -> (callgraph.Graph, callgraph.Graph) {
-  let adapter = Lisette.new()
-  let (old_extracted, new_extracted) = treesitter.extract_file_sets(
-    adapter,
-    old_files,
-    new_files,
-  )
-  let mk_ch = || Channel.buffered<callgraph.Graph>(1)
-  let (old, new) = (mk_ch(), mk_ch())
-  task {
-    old.send(resolve(old_extracted))
+impl Lisette {
+  pub fn resolve(self, files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
+    resolve(files)
   }
-  task {
-    new.send(resolve(new_extracted))
-  }
-  (
-    old.receive().unwrap_or_else(|| resolve(old_extracted)),
-    new.receive().unwrap_or_else(|| resolve(new_extracted)),
-  )
 }
 
 fn resolve(files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
   let mut declarations = callgraph.Symbols.new()
-  let mut functions: Map<string, callgraph.Symbol> = Map.new()
-  let mut methods: Map<string, Option<callgraph.Symbol>> = Map.new()
+  let mut functions = Map.new()
+  let mut exact_methods = Map.new()
+  let mut package_methods = Map.new()
+  let mut global_methods = Map.new()
 
   for file in files {
     let package = package_of(file.path)
@@ -54,14 +28,14 @@ fn resolve(files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
       let symbol = callgraph.Symbol.local(file.path, name)
       declarations.push(symbol)
       if name.contains(".") {
-        let method = field_name(name)
-        let key = f"{package}.{method}"
-        match methods.get(key) {
-          Some(_) => methods[key] = None,
-          None => methods[key] = Some(symbol),
-        }
+        let parts = name.split(".")
+        let method = parts[parts.length() - 1]
+        let receiver = strings.Join(parts[..parts.length() - 1], ".")
+        insert_unique(exact_methods, f"{package}.{receiver}.{method}", symbol)
+        insert_unique(package_methods, f"{package}.{method}", symbol)
+        insert_unique(global_methods, method, symbol)
       } else {
-        functions[f"{package}.{name}"] = symbol
+        insert_unique(functions, f"{package}.{name}", symbol)
       }
     }
   }
@@ -70,7 +44,14 @@ fn resolve(files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
   for file in files {
     let context = resolution_context(file)
     for call in file.calls {
-      let callee = resolve_call(call, context, functions, methods)
+      let callee = resolve_call(
+        call,
+        context,
+        functions,
+        exact_methods,
+        package_methods,
+        global_methods,
+      )
       let kind = match callee.location {
         callgraph.SymbolLocation.External => "external",
         callgraph.SymbolLocation.File { .. } => "local",
@@ -90,33 +71,57 @@ fn resolve(files: Slice<treesitter.ExtractedFile>) -> callgraph.Graph {
 fn resolve_call(
   call: treesitter.ExtractedCall,
   context: ResolutionContext,
-  functions: Map<string, callgraph.Symbol>,
-  methods: Map<string, Option<callgraph.Symbol>>,
+  functions: Map<string, Option<callgraph.Symbol>>,
+  exact_methods: Map<string, Option<callgraph.Symbol>>,
+  package_methods: Map<string, Option<callgraph.Symbol>>,
+  global_methods: Map<string, Option<callgraph.Symbol>>,
 ) -> callgraph.Symbol {
   if !call.callee.contains(".") {
-    return functions
-      .get(f"{context.package}.{call.callee}")
-      .unwrap_or_else(|| {
-        callgraph.Symbol.external(call.callee)
-      })
+    return unique_or_external(
+      functions.get(f"{context.package}.{call.callee}"),
+      call.callee,
+    )
   }
 
   let parts = call.callee.split(".")
   let first = parts[0]
   let method = parts[parts.length() - 1]
-  if first == "self" && call.caller.contains(".") {
+  if first == "self" && parts.length() == 2 && call.caller.contains(".") {
     let receiver = call.caller.split(".")[0]
-    return method_for(context.package, receiver, method, methods, call.callee)
+    return exact_or_external(
+      exact_methods.get(f"{context.package}.{receiver}.{method}"),
+      call.callee,
+    )
   }
   if let Some(imported) = context.imports.get(first) {
     if imported.is_go { return callgraph.Symbol.external(call.callee) }
-    return functions
-      .get(f"{imported.path}.{method}")
-      .unwrap_or_else(|| {
-        callgraph.Symbol.external(call.callee)
-      })
+    let package = canonical_import(imported.path)
+    if parts.length() == 2 {
+      return unique_or_external(
+        functions.get(f"{package}.{method}"),
+        call.callee,
+      )
+    }
+    let receiver = strings.Join(parts[1..parts.length() - 1], ".")
+    return exact_or_external(
+      exact_methods.get(f"{package}.{receiver}.{method}"),
+      call.callee,
+    )
   }
-  method_for(context.package, first, method, methods, call.callee)
+
+  match exact_methods.get(f"{context.package}.{first}.{method}") {
+    Some(Some(symbol)) => return symbol,
+    Some(None) => return callgraph.Symbol.external(call.callee),
+    None => (),
+  }
+  if prelude_method(method) { return callgraph.Symbol.external(call.callee) }
+  match package_methods.get(f"{context.package}.{method}") {
+    Some(Some(symbol)) => return symbol,
+    Some(None) => return callgraph.Symbol.external(call.callee),
+    None => (),
+  }
+  if let Some(Some(symbol)) = global_methods.get(method) { return symbol }
+  callgraph.Symbol.external(call.callee)
 }
 
 fn resolution_context(file: treesitter.ExtractedFile) -> ResolutionContext {
@@ -132,33 +137,79 @@ fn resolution_context(file: treesitter.ExtractedFile) -> ResolutionContext {
   ResolutionContext { package: package_of(file.path), imports }
 }
 
-fn method_for(
-  package: string,
-  receiver: string,
-  method: string,
-  methods: Map<string, Option<callgraph.Symbol>>,
-  fallback: string,
-) -> callgraph.Symbol {
-  match methods.get(f"{package}.{receiver}.{method}") {
-    Some(Some(symbol)) => symbol,
-    _ => methods
-      .get(f"{package}.{method}")
-      .unwrap_or(None)
-      .unwrap_or_else(|| callgraph.Symbol.external(fallback)),
+fn insert_unique(
+  mut index: Map<string, Option<callgraph.Symbol>>,
+  key: string,
+  symbol: callgraph.Symbol,
+) {
+  match index.get(key) {
+    None => index[key] = Some(symbol),
+    Some(Some(current)) if current.to_key() != symbol.to_key() => index[key] = None,
+    _ => (),
   }
 }
 
 fn package_of(path: string) -> string {
-  let package = filepath.Dir(path)
-  if package == "." { "" } else { package }
+  let dir = filepath.ToSlash(filepath.Dir(path))
+  if dir == "." { return "" }
+  let parts = dir.split("/")
+  let mut start = 0
+  for (index, part) in parts.enumerate() {
+    if part == "src" { start = index + 1 }
+  }
+  strings.Join(parts[start..], "/")
+}
+
+fn canonical_import(path: string) -> string {
+  strings.TrimPrefix(filepath.ToSlash(path), "src/")
+}
+
+fn unique_or_external(
+  result: Option<Option<callgraph.Symbol>>,
+  fallback: string,
+) -> callgraph.Symbol {
+  match result {
+    Some(Some(symbol)) => symbol,
+    _ => callgraph.Symbol.external(fallback),
+  }
+}
+
+fn exact_or_external(result: Option<Option<callgraph.Symbol>>, fallback: string) -> callgraph.Symbol {
+  unique_or_external(result, fallback)
+}
+
+fn prelude_method(name: string) -> bool {
+  match name {
+    "append" |
+    "all" |
+    "any" |
+    "bytes" |
+    "clone" |
+    "close" |
+    "contains" |
+    "filter" |
+    "find" |
+    "get" |
+    "is_empty" |
+    "is_none" |
+    "is_ok" |
+    "is_some" |
+    "length" |
+    "map" |
+    "map_or" |
+    "map_or_else" |
+    "ok" |
+    "receive" |
+    "send" |
+    "split" |
+    "substring" |
+    "unwrap_or" |
+    "unwrap_or_else" => true,
+    _ => false,
+  }
 }
 
 fn import_name(path: string) -> string {
   let parts = path.split("/")
-  parts[parts.length() - 1]
-}
-
-fn field_name(qualified: string) -> string {
-  let parts = qualified.split(".")
   parts[parts.length() - 1]
 }

@@ -1,26 +1,45 @@
 import "callgraph"
 import lisette_adapter "treesitter/lisette"
 import "source"
+import "treesitter"
 import "treesitter/golang"
+import "treesitter/python"
 
 pub fn analyze_dir(root: string) -> Result<callgraph.Graph, error> {
   analyze_files(source.files(root)?)
 }
 
 pub fn analyze_files(files: Slice<source.File>) -> Result<callgraph.Graph, error> {
-  let go = golang.analyze_files(files)?
-  let lisette_graph = lisette_adapter.analyze_files(files)?
-  Ok(go.merge(lisette_graph))
+  let go = treesitter.analyze_files(golang.Go.new(), files)
+  let lisette_graph = treesitter.analyze_files(
+    lisette_adapter.Lisette.new(),
+    files,
+  )
+  let python_graph = treesitter.analyze_files(python.Python.new(), files)
+  Ok(go.merge(lisette_graph).merge(python_graph))
 }
 
 pub fn analyze_file_sets(
   old_files: Slice<source.File>,
   new_files: Slice<source.File>,
 ) -> (callgraph.Graph, callgraph.Graph) {
-  let (old_go, new_go) = golang.analyze_file_sets(old_files, new_files)
-  let (old_lisette, new_lisette) = lisette_adapter.analyze_file_sets(
+  let (old_go, new_go) = treesitter.analyze_file_sets(
+    golang.Go.new(),
     old_files,
     new_files,
   )
-  (old_go.merge(old_lisette), new_go.merge(new_lisette))
+  let (old_lisette, new_lisette) = treesitter.analyze_file_sets(
+    lisette_adapter.Lisette.new(),
+    old_files,
+    new_files,
+  )
+  let (old_python, new_python) = treesitter.analyze_file_sets(
+    python.Python.new(),
+    old_files,
+    new_files,
+  )
+  (
+    old_go.merge(old_lisette).merge(old_python),
+    new_go.merge(new_lisette).merge(new_python),
+  )
 }

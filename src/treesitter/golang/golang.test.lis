@@ -10,6 +10,10 @@ fn analyze(source: Slice<byte>) -> callgraph.Graph {
   resolve([Go.new().extract("test.go", source)])
 }
 
+fn analyze_dir(root: string) -> Result<callgraph.Graph, error> {
+  treesitter.analyze_dir(Go.new(), root)
+}
+
 fn analyze_dir_with(root: string, _: string, _: string) -> Result<callgraph.Graph, error> {
   analyze_dir(root)
 }
@@ -21,6 +25,13 @@ fn supports_go_files(adapter: treesitter.Adapter) -> bool {
 #[test]
 fn implements_treesitter_adapter() {
   assert supports_go_files(Go.new())
+}
+
+#[test]
+fn implements_treesitter_language() {
+  let language: treesitter.Language = Go.new()
+  assert language.adapter().supports("main.go")
+  assert language.resolve(Slice.new()).decls.count() == 0
 }
 
 fn render_graph(graph: callgraph.Graph) -> string {

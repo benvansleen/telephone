@@ -1,5 +1,7 @@
 import ts "go:github.com/tree-sitter/go-tree-sitter"
 
+import "callgraph"
+
 pub struct ExtractedCall {
   pub caller: string,
   pub callee: string,
@@ -27,6 +29,11 @@ pub interface Adapter {
 pub interface Worker {
   fn extract(path: string, source: Slice<byte>) -> ExtractedFile
   fn close()
+}
+
+pub interface Language {
+  fn adapter() -> Adapter
+  fn resolve(files: Slice<ExtractedFile>) -> callgraph.Graph
 }
 
 pub struct Capture {

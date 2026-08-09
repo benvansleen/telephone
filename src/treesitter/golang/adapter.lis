@@ -26,6 +26,10 @@ impl Go {
     GoWorker.new()
   }
 
+  pub fn adapter(self) -> treesitter.Adapter {
+    self
+  }
+
   pub fn extract(self, path: string, source: Slice<byte>) -> treesitter.ExtractedFile {
     let worker = GoWorker.new()
     defer worker.close()

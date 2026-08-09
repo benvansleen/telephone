@@ -1,0 +1,34 @@
+import "callgraph"
+import "source"
+
+pub fn analyze_dir(language: Language, root: string) -> Result<callgraph.Graph, error> {
+  Ok(analyze_files(language, source.files(root)?))
+}
+
+pub fn analyze_files(language: Language, files: Slice<source.File>) -> callgraph.Graph {
+  language.resolve(extract_files(language.adapter(), files))
+}
+
+pub fn analyze_file_sets(
+  language: Language,
+  old_files: Slice<source.File>,
+  new_files: Slice<source.File>,
+) -> (callgraph.Graph, callgraph.Graph) {
+  let (old_extracted, new_extracted) = extract_file_sets(
+    language.adapter(),
+    old_files,
+    new_files,
+  )
+  let old_result = Channel.buffered<callgraph.Graph>(1)
+  let new_result = Channel.buffered<callgraph.Graph>(1)
+  task {
+    old_result.send(language.resolve(old_extracted))
+  }
+  task {
+    new_result.send(language.resolve(new_extracted))
+  }
+  (
+    old_result.receive().unwrap_or_else(|| language.resolve(old_extracted)),
+    new_result.receive().unwrap_or_else(|| language.resolve(new_extracted)),
+  )
+}
