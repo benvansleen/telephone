@@ -40,3 +40,14 @@ session.go:
 token.go:
   + verifyToken
 ```
+
+## Installation
+
+### Nix
+
+`nix run github:benvansleen/telephone`
+
+### Building from source
+
+1. Install `lis` from https://github.com/ivov/lisette
+2. `lis run`
